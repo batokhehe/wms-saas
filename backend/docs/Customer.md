@@ -120,7 +120,23 @@ and handler HTTP-boundary tests — the same coverage matrix as Supplier.
 
 ---
 
-## 8. Known gaps
+## 8. Database schema and validation
+
+The `customers` table stores aggregate identity (`id`, `company_id`), immutable
+business code and name, nullable contact/tax fields, denormalised address
+fields, lifecycle status, optimistic-lock version, audit metadata, and the
+standard soft-delete column. `ux_customers_company_code` is a partial unique
+index, so a code is unique only within one live company; all repository queries
+also scope by company before returning or updating a row.
+
+Validation is layered: JSON binding rejects malformed transport input; value
+objects normalise and validate their own values; the aggregate requires a code
+and a 2â€“255-character name; and the service's uniqueness specification enforces
+the tenant-scoped code rule. Email, phone, tax number, and address are optional
+but value-object validated when supplied. Updates require the current version;
+a stale version is a `CONFLICT`.
+
+## 9. Known gaps
 
 1. **DeletionGuard is prepared, not consumed** — no delete operation this sprint;
    the seam awaits the Sales Order module.

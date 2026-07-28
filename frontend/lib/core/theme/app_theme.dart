@@ -18,9 +18,9 @@ abstract final class AppTheme {
       visualDensity: VisualDensity.standard,
       scaffoldBackgroundColor: scheme.surfaceContainerLowest,
       textTheme: Typography.material2021().black.apply(
-            bodyColor: scheme.onSurface,
-            displayColor: scheme.onSurface,
-          ),
+        bodyColor: scheme.onSurface,
+        displayColor: scheme.onSurface,
+      ),
       cardTheme: CardThemeData(
         elevation: 0,
         color: scheme.surface,
@@ -40,7 +40,10 @@ abstract final class AppTheme {
           borderRadius: BorderRadius.circular(AppRadius.input),
           borderSide: BorderSide(color: outline),
         ),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 14,
+        ),
       ),
       appBarTheme: AppBarTheme(
         backgroundColor: scheme.surface,
@@ -55,11 +58,15 @@ abstract final class AppTheme {
         selectedIconTheme: IconThemeData(color: scheme.onSecondaryContainer),
       ),
       dialogTheme: DialogThemeData(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.dialog)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.dialog),
+        ),
       ),
       chipTheme: ChipThemeData(
         side: BorderSide(color: outline),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.input)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.input),
+        ),
       ),
       dataTableTheme: DataTableThemeData(
         headingRowColor: WidgetStatePropertyAll(scheme.surfaceContainerLow),

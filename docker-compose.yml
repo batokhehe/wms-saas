@@ -141,8 +141,6 @@ services:
       AUTH_JWT_ACCESS_TOKEN_TTL: ${AUTH_JWT_ACCESS_TOKEN_TTL:-15m}
       AUTH_JWT_REFRESH_TOKEN_TTL: ${AUTH_JWT_REFRESH_TOKEN_TTL:-168h}
       AUTH_PASSWORD_BCRYPT_COST: ${AUTH_PASSWORD_BCRYPT_COST:-12}
-    ports:
-      - "${HTTP_PORT:-8080}:8080"
     # SIGTERM reaches the process so the graceful shutdown path gets its full
     # budget; the default 10s grace period would cut a 20s drain short.
     stop_signal: SIGTERM
@@ -150,6 +148,19 @@ services:
     # No healthcheck is declared here: the distroless runtime image ships no
     # shell and no curl, so probe the /health/ready endpoint from outside the
     # container (the orchestrator does this natively in production).
+    networks: [wms]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: wms-frontend
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "${HTTP_PORT:-8080}:80"
     networks: [wms]
 
 volumes:
