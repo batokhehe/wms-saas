@@ -1,0 +1,9 @@
+ALTER TABLE storage_locations DROP COLUMN version;
+ALTER TABLE warehouses DROP COLUMN version;
+ALTER TABLE role_permissions DROP COLUMN version;
+ALTER TABLE roles DROP COLUMN version;
+ALTER TABLE permissions DROP COLUMN version;
+ALTER TABLE memberships DROP COLUMN version;
+ALTER TABLE companies DROP COLUMN version;
+ALTER TABLE refresh_tokens DROP COLUMN version;
+ALTER TABLE users DROP COLUMN version;

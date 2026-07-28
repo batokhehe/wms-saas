@@ -1,0 +1,49 @@
+# ---------- Secrets ----------
+# .env holds real credentials; only the example template is committed.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---------- Go ----------
+backend/bin/
+backend/tmp/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+coverage.html
+# The vendor directory is intentionally not used; go.sum pins dependencies.
+vendor/
+
+# ---------- Flutter / Dart ----------
+frontend/build/
+frontend/.dart_tool/
+frontend/.packages
+frontend/.flutter-plugins
+frontend/.flutter-plugins-dependencies
+frontend/ios/Pods/
+frontend/android/.gradle/
+frontend/android/local.properties
+*.iml
+
+# ---------- Editors ----------
+.idea/
+.vscode/
+*.swp
+*~
+
+# ---------- OS ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- Logs ----------
+*.log
+logs/
+/.gocache

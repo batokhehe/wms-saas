@@ -1,0 +1,273 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/batokhehe/wms-saas/backend/internal/module/supplier/dto"
+	"github.com/batokhehe/wms-saas/backend/internal/module/supplier/entity"
+	"github.com/batokhehe/wms-saas/backend/internal/module/supplier/mapper"
+	"github.com/batokhehe/wms-saas/backend/internal/module/supplier/repository"
+	"github.com/batokhehe/wms-saas/backend/internal/shared/appcontext"
+	"github.com/batokhehe/wms-saas/backend/internal/shared/pagination"
+	"github.com/batokhehe/wms-saas/backend/internal/shared/port"
+	sharedrepo "github.com/batokhehe/wms-saas/backend/internal/shared/repository"
+	"github.com/batokhehe/wms-saas/backend/internal/shared/transaction"
+	"github.com/batokhehe/wms-saas/backend/pkg/apperror"
+)
+
+// mutation is a single domain call on a loaded aggregate.
+type mutation func(*entity.Supplier, uuid.UUID, time.Time) error
+
+// Service orchestrates the Supplier aggregate.
+//
+// The shape every write shares: resolve tenant + actor → (verify set rules) →
+// load or build the aggregate → call one domain method → persist → commit →
+// publish. It holds no business rules; the code-uniqueness set rule is a
+// specification, and everything else is the aggregate's.
+type Service struct {
+	repo     repository.Repository
+	codeSpec UniqueSupplierCode
+	clock    port.Clock
+	ids      port.IDGenerator
+	tx       transaction.Manager
+	events   EventPublisher
+}
+
+// New builds the service.
+func New(
+	repo repository.Repository,
+	clock port.Clock,
+	ids port.IDGenerator,
+	tx transaction.Manager,
+	events EventPublisher,
+) *Service {
+	return &Service{
+		repo:     repo,
+		codeSpec: NewUniqueSupplierCode(repo),
+		clock:    clock,
+		ids:      ids,
+		tx:       tx,
+		events:   events,
+	}
+}
+
+// actor resolves the tenant and the acting user together, both from the
+// RequestContext so a client cannot name a company or impersonate a user.
+func (s *Service) actor(ctx context.Context) (companyID, userID uuid.UUID, err error) {
+	rc := appcontext.From(ctx)
+	if userID, err = rc.RequireUser(); err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+	if companyID, err = rc.RequireTenant(); err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+	return companyID, userID, nil
+}
+
+// Create registers a supplier.
+func (s *Service) Create(ctx context.Context, req dto.CreateSupplierRequest) (dto.SupplierResponse, error) {
+	companyID, actorID, err := s.actor(ctx)
+	if err != nil {
+		return dto.SupplierResponse{}, err
+	}
+
+	code, err := entity.NewSupplierCode(req.Code)
+	if err != nil {
+		return dto.SupplierResponse{}, err
+	}
+	email, phone, tax, err := buildContact(req.Email, req.Phone, req.TaxNumber)
+	if err != nil {
+		return dto.SupplierResponse{}, err
+	}
+	address, err := entity.NewAddress(req.Address, req.City, req.Province, req.Country, req.PostalCode)
+	if err != nil {
+		return dto.SupplierResponse{}, err
+	}
+
+	var supplier *entity.Supplier
+
+	err = s.tx.RunInTransaction(ctx, func(ctx context.Context) error {
+		// Set-level rule: only the repository can see siblings. Checked explicitly
+		// for a clear message; the unique index remains the guarantee against a
+		// race.
+		if err := s.codeSpec.Satisfy(ctx, companyID, code.String()); err != nil {
+			return err
+		}
+		created, err := entity.NewSupplier(
+			s.ids.NewID(), companyID, code, req.Name, email, phone, tax, address, actorID, s.clock.Now(),
+		)
+		if err != nil {
+			return err
+		}
+		if err := s.repo.Save(ctx, created); err != nil {
+			return err
+		}
+		supplier = created
+		return nil
+	})
+	if err != nil {
+		return dto.SupplierResponse{}, err
+	}
+
+	s.publish(ctx, supplier)
+	return mapper.ToResponse(supplier), nil
+}
+
+// Get returns one supplier.
+func (s *Service) Get(ctx context.Context, supplierID uuid.UUID) (dto.SupplierResponse, error) {
+	companyID, _, err := s.actor(ctx)
+	if err != nil {
+		return dto.SupplierResponse{}, err
+	}
+	supplier, err := s.repo.FindByID(ctx, supplierID, companyID)
+	if err != nil {
+		return dto.SupplierResponse{}, err
+	}
+	return mapper.ToResponse(supplier), nil
+}
+
+// List returns a page of the company's suppliers.
+func (s *Service) List(ctx context.Context, query dto.ListSuppliersQuery) (pagination.Page[dto.SupplierResponse], error) {
+	companyID, _, err := s.actor(ctx)
+	if err != nil {
+		return pagination.Page[dto.SupplierResponse]{}, err
+	}
+	if err := query.Request.Apply(dto.SortOptions()); err != nil {
+		return pagination.Page[dto.SupplierResponse]{}, err
+	}
+	page, err := s.repo.List(ctx, companyID, repository.ListFilter{
+		Paging: query.Request,
+		Status: query.Status,
+	})
+	if err != nil {
+		return pagination.Page[dto.SupplierResponse]{}, err
+	}
+	return mapper.ToPage(page), nil
+}
+
+// Update replaces a supplier's mutable attributes.
+func (s *Service) Update(ctx context.Context, supplierID uuid.UUID, req dto.UpdateSupplierRequest) (dto.SupplierResponse, error) {
+	email, phone, tax, err := buildContact(req.Email, req.Phone, req.TaxNumber)
+	if err != nil {
+		return dto.SupplierResponse{}, err
+	}
+	address, err := entity.NewAddress(req.Address, req.City, req.Province, req.Country, req.PostalCode)
+	if err != nil {
+		return dto.SupplierResponse{}, err
+	}
+	return s.mutate(ctx, supplierID, "Update", func(sup *entity.Supplier, actor uuid.UUID, now time.Time) error {
+		return sup.Update(req.Name, email, phone, tax, address, actor, now)
+	})
+}
+
+// Activate makes a supplier selectable for new orders.
+func (s *Service) Activate(ctx context.Context, supplierID uuid.UUID) (dto.SupplierResponse, error) {
+	return s.mutate(ctx, supplierID, "Activate", func(sup *entity.Supplier, actor uuid.UUID, now time.Time) error {
+		sup.Activate(actor, now)
+		return nil
+	})
+}
+
+// Deactivate removes a supplier from selection for new orders.
+func (s *Service) Deactivate(ctx context.Context, supplierID uuid.UUID) (dto.SupplierResponse, error) {
+	return s.mutate(ctx, supplierID, "Deactivate", func(sup *entity.Supplier, actor uuid.UUID, now time.Time) error {
+		sup.Deactivate(actor, now)
+		return nil
+	})
+}
+
+// mutate is the shared shape of every load-modify-persist operation. Load, call
+// one domain method, persist — inside one transaction — then publish after
+// commit, so an event is never emitted for a change that rolled back.
+func (s *Service) mutate(ctx context.Context, supplierID uuid.UUID, op string, apply mutation) (dto.SupplierResponse, error) {
+	companyID, actorID, err := s.actor(ctx)
+	if err != nil {
+		return dto.SupplierResponse{}, err
+	}
+
+	var supplier *entity.Supplier
+
+	err = s.tx.RunInTransaction(ctx, func(ctx context.Context) error {
+		loaded, err := s.repo.FindByID(ctx, supplierID, companyID)
+		if err != nil {
+			return err
+		}
+		// Defence in depth: the repository already filtered by tenant.
+		if !loaded.BelongsTo(companyID) {
+			return apperror.Forbidden("This supplier belongs to another company").
+				WithOp("supplier.service." + op)
+		}
+		if err := apply(loaded, actorID, s.clock.Now()); err != nil {
+			return err
+		}
+		if err := s.repo.Update(ctx, loaded); err != nil {
+			return err
+		}
+		supplier = loaded
+		return nil
+	})
+	if err != nil {
+		return dto.SupplierResponse{}, s.concurrentModification(ctx, supplierID, companyID, err)
+	}
+
+	s.publish(ctx, supplier)
+	return mapper.ToResponse(supplier), nil
+}
+
+// concurrentModification turns the repository sentinel into the API's normal 409
+// after rollback, carrying the current version as the retry token.
+func (s *Service) concurrentModification(ctx context.Context, id, companyID uuid.UUID, err error) error {
+	if err == nil || !errors.Is(err, sharedrepo.ErrConcurrentModification) {
+		return err
+	}
+	current, readErr := s.repo.FindByID(ctx, id, companyID)
+	if readErr != nil {
+		return err
+	}
+	return apperror.Conflict("The resource was changed by another request").
+		WithOp("supplier.service.concurrentModification").
+		WithDetails(map[string]any{"entity_id": id, "current_version": current.Version()}).
+		WithCause(sharedrepo.ErrConcurrentModification)
+}
+
+// publish drains the aggregate's recorded events and publishes them. PullEvents
+// clears as it reads, so a double publish is impossible.
+func (s *Service) publish(ctx context.Context, sup *entity.Supplier) {
+	for _, event := range sup.PullEvents() {
+		s.events.Publish(ctx, event)
+	}
+}
+
+// buildContact turns the request's optional contact strings into value objects,
+// treating an empty string as absence and validating a non-empty one.
+func buildContact(email, phone, taxNumber string) (entity.Email, entity.Phone, entity.TaxNumber, error) {
+	e := entity.NoEmail()
+	if email != "" {
+		built, err := entity.NewEmail(email)
+		if err != nil {
+			return entity.Email{}, entity.Phone{}, entity.TaxNumber{}, err
+		}
+		e = built
+	}
+	p := entity.NoPhone()
+	if phone != "" {
+		built, err := entity.NewPhone(phone)
+		if err != nil {
+			return entity.Email{}, entity.Phone{}, entity.TaxNumber{}, err
+		}
+		p = built
+	}
+	tax := entity.NoTaxNumber()
+	if taxNumber != "" {
+		built, err := entity.NewTaxNumber(taxNumber)
+		if err != nil {
+			return entity.Email{}, entity.Phone{}, entity.TaxNumber{}, err
+		}
+		tax = built
+	}
+	return e, p, tax, nil
+}
