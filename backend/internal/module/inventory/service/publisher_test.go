@@ -29,12 +29,12 @@ func TestLogEventPublisherStampsEventFacts(t *testing.T) {
 
 	inventoryID, companyID, actorID := uuid.New(), uuid.New(), uuid.New()
 	publisher.Publish(ctx, entity.Event{
-		Name:        entity.EventInventoryReserved,
-		InventoryID: inventoryID,
-		CompanyID:   companyID,
-		ActorID:     actorID,
-		OccurredAt:  time.Now().UTC(),
-		Attributes:  map[string]any{"amount": int64(7), "available": int64(3)},
+		Name:       entity.EventStockReserved,
+		PositionID: inventoryID,
+		CompanyID:  companyID,
+		ActorID:    actorID,
+		OccurredAt: time.Now().UTC(),
+		Attributes: map[string]any{"amount": int64(7), "available": int64(3)},
 	})
 
 	logs := recorded.All()
@@ -43,11 +43,11 @@ func TestLogEventPublisherStampsEventFacts(t *testing.T) {
 	}
 	fields := logs[0].ContextMap()
 
-	if got := fields["event"]; got != string(entity.EventInventoryReserved) {
-		t.Errorf("event = %v, want %s", got, entity.EventInventoryReserved)
+	if got := fields["event"]; got != string(entity.EventStockReserved) {
+		t.Errorf("event = %v, want %s", got, entity.EventStockReserved)
 	}
-	if got := fields["event_inventory_id"]; got != inventoryID.String() {
-		t.Errorf("event_inventory_id = %v, want %s", got, inventoryID)
+	if got := fields["event_position_id"]; got != inventoryID.String() {
+		t.Errorf("event_position_id = %v, want %s", got, inventoryID)
 	}
 	if got := fields["event_company_id"]; got != companyID.String() {
 		t.Errorf("event_company_id = %v", got)

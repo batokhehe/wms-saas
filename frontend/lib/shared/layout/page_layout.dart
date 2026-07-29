@@ -51,10 +51,7 @@ class AppPage extends StatelessWidget {
               Wrap(
                 spacing: AppSpacing.md,
                 runSpacing: AppSpacing.sm,
-                children: [
-                  if (search != null) search!,
-                  if (filters != null) filters!,
-                ],
+                children: [?search, ?filters],
               ),
             ],
             const SizedBox(height: AppSpacing.lg),

@@ -22,7 +22,7 @@ class AppButton extends StatelessWidget {
             child: CircularProgressIndicator(strokeWidth: 2),
           )
         : Text(label);
-    if (isOutlined)
+    if (isOutlined) {
       return icon == null
           ? OutlinedButton(onPressed: loading ? null : onPressed, child: child)
           : OutlinedButton.icon(
@@ -30,6 +30,7 @@ class AppButton extends StatelessWidget {
               icon: Icon(icon),
               label: child,
             );
+    }
     return icon == null
         ? FilledButton(onPressed: loading ? null : onPressed, child: child)
         : FilledButton.icon(

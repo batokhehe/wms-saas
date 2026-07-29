@@ -177,6 +177,14 @@ func DefaultPermissions(roleName string) []Code {
 			SupplierRead, SupplierCreate, SupplierUpdate, SupplierActivate,
 			// Customers are master data an admin curates end to end.
 			CustomerRead, CustomerCreate, CustomerUpdate, CustomerActivate,
+			// The ledger is the audit trail behind every stock movement.
+			InventoryLedgerRead,
+			// Category and brand are catalogue master data an admin curates.
+			// Delete is withheld for the same reason as warehouse.delete:
+			// removing a classification other records point at is an ownership
+			// decision.
+			CategoryRead, CategoryCreate, CategoryUpdate,
+			BrandRead, BrandCreate, BrandUpdate,
 		}
 
 	case SystemRoleStaff:
@@ -201,6 +209,10 @@ func DefaultPermissions(roleName string) []Code {
 			SupplierRead,
 			// Staff read the customer catalogue but do not curate it.
 			CustomerRead,
+			// Staff consult the ledger to answer "where did my stock go?".
+			InventoryLedgerRead,
+			// Staff read the catalogue classifications but do not curate them.
+			CategoryRead, BrandRead,
 		}
 
 	default:

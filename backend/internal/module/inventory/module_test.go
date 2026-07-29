@@ -6,7 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
-	invport "github.com/batokhehe/wms-saas/backend/internal/module/inventory/port"
+	invservice "github.com/batokhehe/wms-saas/backend/internal/module/inventory/service"
 	adapterclock "github.com/batokhehe/wms-saas/backend/internal/shared/adapter/clock"
 	adapterid "github.com/batokhehe/wms-saas/backend/internal/shared/adapter/id"
 	"github.com/batokhehe/wms-saas/backend/internal/shared/module"
@@ -25,10 +25,10 @@ func TestModuleWiring(t *testing.T) {
 		Clock:  adapterclock.NewSystem(),
 		IDs:    adapterid.NewUUID(),
 	}, Config{
-		Products:     invport.NewAcceptAnyProduct(),
-		Warehouses:   invport.NewAcceptAnyWarehouse(),
-		Locations:    invport.NewAcceptAnyLocation(),
-		Reservations: invport.NewNoReservations(),
+		Products:   invservice.NewAcceptAnyProduct(),
+		Warehouses: invservice.NewAcceptAnyWarehouse(),
+		Locations:  invservice.NewAcceptAnyLocation(),
+		Policy:     invservice.NewDefaultStockPolicy(),
 	})
 
 	if m.Name() != "inventory" {
@@ -44,19 +44,18 @@ func TestModuleWiring(t *testing.T) {
 	}
 
 	want := []string{
-		"GET /api/v1/inventories",
-		"POST /api/v1/inventories",
-		"GET /api/v1/inventories/:id",
-		"POST /api/v1/inventories/:id/increase",
-		"POST /api/v1/inventories/:id/decrease",
-		"POST /api/v1/inventories/:id/reserve",
-		"POST /api/v1/inventories/:id/release",
-		"POST /api/v1/inventories/:id/transfer-out",
-		"POST /api/v1/inventories/:id/transfer-in",
-		"POST /api/v1/inventories/:id/adjust",
-		"POST /api/v1/inventories/:id/cycle-count",
-		"POST /api/v1/inventories/:id/lock",
-		"POST /api/v1/inventories/:id/unlock",
+		"GET /api/v1/inventory-positions",
+		"GET /api/v1/inventory-positions/:id",
+		"POST /api/v1/inventory-positions/receive",
+		"POST /api/v1/inventory-positions/:id/issue",
+		"POST /api/v1/inventory-positions/:id/reserve",
+		"POST /api/v1/inventory-positions/:id/release",
+		"POST /api/v1/inventory-positions/:id/allocate",
+		"POST /api/v1/inventory-positions/:id/deallocate",
+		"POST /api/v1/inventory-positions/:id/quarantine",
+		"POST /api/v1/inventory-positions/:id/release-quarantine",
+		"POST /api/v1/inventory-positions/:id/transfer",
+		"POST /api/v1/inventory-positions/:id/adjust",
 	}
 	for _, route := range want {
 		if !got[route] {

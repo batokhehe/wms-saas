@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
-	inventoryport "github.com/batokhehe/wms-saas/backend/internal/module/inventory/port"
+	inventoryservice "github.com/batokhehe/wms-saas/backend/internal/module/inventory/service"
 	locationrepo "github.com/batokhehe/wms-saas/backend/internal/module/location/repository"
 	productrepo "github.com/batokhehe/wms-saas/backend/internal/module/product/repository"
 	warehouserepo "github.com/batokhehe/wms-saas/backend/internal/module/warehouse/repository"
@@ -31,7 +31,7 @@ type inventoryProductProvider struct {
 	products productrepo.Repository
 }
 
-var _ inventoryport.ProductProvider = (*inventoryProductProvider)(nil)
+var _ inventoryservice.ProductVerifier = (*inventoryProductProvider)(nil)
 
 func newInventoryProductProvider(products productrepo.Repository) *inventoryProductProvider {
 	return &inventoryProductProvider{products: products}
@@ -58,7 +58,7 @@ type inventoryWarehouseProvider struct {
 	warehouses warehouserepo.Repository
 }
 
-var _ inventoryport.WarehouseProvider = (*inventoryWarehouseProvider)(nil)
+var _ inventoryservice.WarehouseVerifier = (*inventoryWarehouseProvider)(nil)
 
 func newInventoryWarehouseProvider(warehouses warehouserepo.Repository) *inventoryWarehouseProvider {
 	return &inventoryWarehouseProvider{warehouses: warehouses}
@@ -84,7 +84,7 @@ type inventoryLocationProvider struct {
 	locations locationrepo.Repository
 }
 
-var _ inventoryport.LocationProvider = (*inventoryLocationProvider)(nil)
+var _ inventoryservice.LocationVerifier = (*inventoryLocationProvider)(nil)
 
 func newInventoryLocationProvider(locations locationrepo.Repository) *inventoryLocationProvider {
 	return &inventoryLocationProvider{locations: locations}

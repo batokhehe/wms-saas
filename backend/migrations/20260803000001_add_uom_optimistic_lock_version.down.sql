@@ -1,0 +1,1 @@
+ALTER TABLE uoms DROP COLUMN version;

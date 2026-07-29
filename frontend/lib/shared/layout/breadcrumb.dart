@@ -56,11 +56,12 @@ class _BreadcrumbLink extends StatelessWidget {
         Text(item.label),
       ],
     );
-    if (current || item.location == null)
+    if (current || item.location == null) {
       return DefaultTextStyle.merge(
         style: Theme.of(context).textTheme.bodyMedium,
         child: label,
       );
+    }
     return TextButton(
       onPressed: () => context.go(item.location!),
       child: label,

@@ -21,10 +21,10 @@ class FilterBar extends StatelessWidget {
     runSpacing: AppSpacing.sm,
     crossAxisAlignment: WrapCrossAlignment.center,
     children: [
-      if (search != null) search!,
-      if (status != null) status!,
-      if (dateRange != null) dateRange!,
-      if (warehouse != null) warehouse!,
+      ?search,
+      ?status,
+      ?dateRange,
+      ?warehouse,
       if (onReset != null)
         TextButton(onPressed: onReset, child: const Text('Reset')),
       if (onApply != null) AppButton(label: 'Apply', onPressed: onApply),

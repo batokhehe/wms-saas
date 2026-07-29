@@ -1,9 +1,7 @@
-// Package mapper converts the Inventory aggregate into transport DTOs.
+// Package mapper converts the InventoryPosition aggregate into transport DTOs.
 //
 // LAYER RULE: conversion lives here and nowhere else. The direction is aggregate
-// → DTO only. There is no FromCreateRequest, because building an aggregate is the
-// FACTORY's job — entity.NewInventory — and a mapper that constructed one would
-// bypass the invariants the factory enforces.
+// → DTO only; building a position is the factory's job.
 package mapper
 
 import (
@@ -12,44 +10,49 @@ import (
 	"github.com/batokhehe/wms-saas/backend/internal/shared/pagination"
 )
 
-// ToResponse converts an aggregate into its API representation. Everything is
-// read through getters — the mapper is subject to exactly the same encapsulation
-// as every other caller.
-func ToResponse(inv *entity.Inventory) dto.InventoryResponse {
-	if inv == nil {
-		return dto.InventoryResponse{}
+// ToResponse converts a position into its API representation, reading through
+// getters — the mapper is subject to the same encapsulation as every caller.
+//
+// OnHand is asked of the AGGREGATE rather than summed here: the derivation is a
+// domain rule, and recomputing it in the transport layer would be a second
+// implementation free to drift from the first.
+func ToResponse(p *entity.InventoryPosition) dto.PositionResponse {
+	if p == nil {
+		return dto.PositionResponse{}
+	}
+	attrs := p.Attributes()
+
+	resp := dto.PositionResponse{
+		ID:          p.ID(),
+		CompanyID:   p.CompanyID(),
+		WarehouseID: p.WarehouseID(),
+		LocationID:  p.LocationID(),
+		ProductID:   p.ProductID(),
+		Tracking:    attrs.Tracking().String(),
+		Available:   p.Available().Value(),
+		Reserved:    p.Reserved().Value(),
+		Allocated:   p.Allocated().Value(),
+		Quarantined: p.Quarantined().Value(),
+		OnHand:      p.OnHand(),
+		CreatedBy:   p.CreatedBy(),
+		UpdatedBy:   p.UpdatedBy(),
+		CreatedAt:   p.CreatedAt(),
+		UpdatedAt:   p.UpdatedAt(),
 	}
 
-	resp := dto.InventoryResponse{
-		ID:          inv.ID(),
-		CompanyID:   inv.CompanyID(),
-		WarehouseID: inv.WarehouseID(),
-		LocationID:  inv.LocationID(),
-		ProductID:   inv.ProductID(),
-		Tracking:    inv.TrackingType().String(),
-		Status:      inv.Status().String(),
-		OnHand:      inv.OnHand().Value(),
-		Reserved:    inv.Reserved().Value(),
-		Available:   inv.Available().Value(),
-		CreatedBy:   inv.CreatedBy(),
-		UpdatedBy:   inv.UpdatedBy(),
-		CreatedAt:   inv.CreatedAt(),
-		UpdatedAt:   inv.UpdatedAt(),
-	}
-
-	if inv.HasLot() {
-		lot := inv.Lot().String()
+	if attrs.HasLot() {
+		lot := attrs.Lot().String()
 		resp.LotNumber = &lot
 	}
-	if inv.HasSerial() {
-		serial := inv.Serial().String()
+	if attrs.HasSerial() {
+		serial := attrs.Serial().String()
 		resp.SerialNumber = &serial
 	}
 
 	return resp
 }
 
-// ToPage converts a page of aggregates, preserving the pagination metadata.
-func ToPage(page pagination.Page[*entity.Inventory]) pagination.Page[dto.InventoryResponse] {
+// ToPage converts a page of positions, preserving the pagination metadata.
+func ToPage(page pagination.Page[*entity.InventoryPosition]) pagination.Page[dto.PositionResponse] {
 	return pagination.MapPage(page, ToResponse)
 }

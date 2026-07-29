@@ -25,6 +25,13 @@ class AppDataTable extends StatefulWidget {
     this.onBulkAction,
     this.onColumnResize,
     this.pageSize = 10,
+    this.currentPage,
+    this.totalRecords,
+    this.onPageChanged,
+    this.sortField,
+    this.sortDirection,
+    this.sortFields,
+    this.onSortChanged,
   });
   final String title;
   final String? subtitle, errorMessage;
@@ -36,6 +43,21 @@ class AppDataTable extends StatefulWidget {
   final ValueChanged<String>? onSearch;
   final void Function(int columnIndex, bool ascending)? onSort;
   final int pageSize;
+
+  /// Zero-based page supplied by a server-paginated parent.
+  final int? currentPage;
+
+  /// Server-reported record count. When supplied with [onPageChanged], rows
+  /// are treated as the current server page rather than locally sliced.
+  final int? totalRecords;
+  final ValueChanged<int>? onPageChanged;
+
+  /// Externally controlled server-sort field and direction. [sortFields]
+  /// maps visible source-column indexes to backend API sort keys.
+  final String? sortField;
+  final bool? sortDirection;
+  final List<String>? sortFields;
+  final void Function(String field, bool ascending)? onSortChanged;
   @override
   State<AppDataTable> createState() => _AppDataTableState();
 }
@@ -57,24 +79,40 @@ class _AppDataTableState extends State<AppDataTable> {
   @override
   void didUpdateWidget(covariant AppDataTable oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.columns.length != widget.columns.length)
+    if (oldWidget.columns.length != widget.columns.length) {
       _visibleColumns = {
         for (var index = 0; index < widget.columns.length; index++) index,
       };
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     if (widget.loading) return const TableLoading();
-    if (widget.errorMessage != null)
+    if (widget.errorMessage != null) {
       return AppErrorState(
         message: widget.errorMessage!,
         onRetry: widget.onRetry,
       );
+    }
     if (widget.rows.isEmpty) return const TableEmpty();
     final visible = _visibleColumns.toList()..sort();
-    final start = _page * widget.pageSize;
-    final pageRows = widget.rows.skip(start).take(widget.pageSize).toList();
+    final externalSourceIndex =
+        widget.sortField == null || widget.sortFields == null
+        ? null
+        : widget.sortFields!.indexOf(widget.sortField!);
+    final externalSortIndex = externalSourceIndex == null
+        ? null
+        : visible.indexOf(externalSourceIndex);
+    final serverPaged =
+        widget.totalRecords != null && widget.onPageChanged != null;
+    final page = widget.currentPage ?? _page;
+    final start = serverPaged
+        ? page * widget.pageSize
+        : _page * widget.pageSize;
+    final pageRows = serverPaged
+        ? widget.rows
+        : widget.rows.skip(start).take(widget.pageSize).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -97,8 +135,10 @@ class _AppDataTableState extends State<AppDataTable> {
                 showCheckboxColumn: true,
                 onSelectAll: (selected) =>
                     _selectPage(selected == true, start, pageRows.length),
-                sortColumnIndex: _sortColumnIndex,
-                sortAscending: _ascending,
+                sortColumnIndex: externalSortIndex == -1
+                    ? null
+                    : externalSortIndex ?? _sortColumnIndex,
+                sortAscending: widget.sortDirection ?? _ascending,
                 columns: [for (final index in visible) _columnFor(index)],
                 rows: [
                   for (var offset = 0; offset < pageRows.length; offset++)
@@ -109,10 +149,16 @@ class _AppDataTableState extends State<AppDataTable> {
           ),
         ),
         TablePagination(
-          page: _page,
+          page: page,
           pageSize: widget.pageSize,
-          totalRows: widget.rows.length,
-          onPageChanged: (page) => setState(() => _page = page),
+          totalRows: widget.totalRecords ?? widget.rows.length,
+          onPageChanged: (nextPage) {
+            if (serverPaged) {
+              widget.onPageChanged!(nextPage);
+            } else {
+              setState(() => _page = nextPage);
+            }
+          },
         ),
       ],
     );
@@ -127,11 +173,18 @@ class _AppDataTableState extends State<AppDataTable> {
       onSort: source.onSort == null
           ? null
           : (columnIndex, ascending) {
-              setState(() {
-                _sortColumnIndex = columnIndex;
-                _ascending = ascending;
-              });
+              if (widget.onSortChanged == null) {
+                setState(() {
+                  _sortColumnIndex = columnIndex;
+                  _ascending = ascending;
+                });
+              }
               widget.onSort?.call(index, ascending);
+              final field =
+                  widget.sortFields != null && index < widget.sortFields!.length
+                  ? widget.sortFields![index]
+                  : index.toString();
+              widget.onSortChanged?.call(field, ascending);
             },
     );
   }

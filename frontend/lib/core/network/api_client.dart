@@ -1,5 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+final apiClientProvider = Provider((ref) => ApiClient(TokenStorage(const FlutterSecureStorage())));
 
 class TokenStorage {
   const TokenStorage(this._storage);
@@ -35,8 +38,9 @@ class ApiClient {
         onError: (error, handler) async {
           if (error.response?.statusCode != 401 ||
               error.requestOptions.extra['retried'] == true ||
-              error.requestOptions.path.contains('/auth/refresh'))
+              error.requestOptions.path.contains('/auth/refresh')) {
             return handler.next(error);
+          }
           final refresh = await tokens.refreshToken();
           if (refresh == null) return handler.next(error);
           try {

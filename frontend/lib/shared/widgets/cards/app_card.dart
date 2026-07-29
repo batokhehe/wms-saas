@@ -13,11 +13,11 @@ class AppCard extends StatelessWidget {
   final Widget child;
   final String? title;
   final Widget? action;
-  final double padding;
+  final EdgeInsetsGeometry padding;
   @override
   Widget build(BuildContext context) => Card(
     child: Padding(
-      padding: EdgeInsets.all(padding),
+      padding: padding,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -30,7 +30,7 @@ class AppCard extends StatelessWidget {
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
-                if (action != null) action!,
+                ?action,
               ],
             ),
           if (title != null) const SizedBox(height: AppSpacing.md),

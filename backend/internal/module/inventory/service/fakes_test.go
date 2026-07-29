@@ -20,124 +20,101 @@ var errInfrastructure = errors.New("database unreachable")
 
 // ---------- repository ----------
 
-// fakeRepo is an in-memory repository that reimplements tenant filtering and the
-// three uniqueness rules in Go, so an isolation or uniqueness bug in the service
-// is caught here. The SQL itself is verified by the persistence integration
-// suite; this stands in for it.
+// fakeRepo is an in-memory repository that reimplements tenant filtering and
+// key-based lookup in Go, so an isolation or addressing bug in the service is
+// caught here. The SQL itself belongs to the integration suite.
 type fakeRepo struct {
 	mu     sync.Mutex
-	byID   map[uuid.UUID]*entity.Inventory
+	byID   map[uuid.UUID]*entity.InventoryPosition
 	failOn map[string]error
+	ids    func() uuid.UUID
 }
 
 var _ repository.Repository = (*fakeRepo)(nil)
 
 func newFakeRepo() *fakeRepo {
-	return &fakeRepo{byID: map[uuid.UUID]*entity.Inventory{}, failOn: map[string]error{}}
+	return &fakeRepo{
+		byID:   map[uuid.UUID]*entity.InventoryPosition{},
+		failOn: map[string]error{},
+		ids:    uuid.New,
+	}
 }
 
 func (r *fakeRepo) fail(method string, err error) { r.failOn[method] = err }
 
-func (r *fakeRepo) Save(_ context.Context, inv *entity.Inventory) error {
-	if err := r.failOn["Save"]; err != nil {
+// GetOrCreatePosition mirrors the real contract: find by key, or open an EMPTY
+// position that is not persisted until Update.
+func (r *fakeRepo) GetOrCreatePosition(
+	ctx context.Context, key entity.StockKey, actorID uuid.UUID,
+) (*entity.InventoryPosition, error) {
+	if err := r.failOn["GetOrCreatePosition"]; err != nil {
+		return nil, err
+	}
+	found, err := r.FindByKey(ctx, key)
+	if err == nil {
+		return found, nil
+	}
+	if !errors.Is(err, apperror.ErrNotFound) {
+		return nil, err
+	}
+	return entity.NewInventoryPosition(r.ids(), key, actorID, fixedNow())
+}
+
+func (r *fakeRepo) Update(_ context.Context, p *entity.InventoryPosition) error {
+	if err := r.failOn["Update"]; err != nil {
 		return err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	if _, ok := r.byID[inv.ID()]; ok {
-		r.byID[inv.ID()] = inv // update
-		return nil
-	}
-	// Create: enforce the per-tracking-type uniqueness the indexes enforce.
-	for _, e := range r.byID {
-		if inv.TrackingType() == entity.TrackingSerial && e.HasSerial() &&
-			e.Serial().String() == inv.Serial().String() {
-			return apperror.Conflict("duplicate serial").WithOp("fake.Save") // global
-		}
-		if e.CompanyID() != inv.CompanyID() {
-			continue
-		}
-		samePlace := e.ProductID() == inv.ProductID() && e.LocationID() == inv.LocationID()
-		if inv.TrackingType() == entity.TrackingNone && e.TrackingType() == entity.TrackingNone && samePlace {
-			return apperror.Conflict("duplicate none position").WithOp("fake.Save")
-		}
-		if inv.TrackingType() == entity.TrackingLot && e.TrackingType() == entity.TrackingLot &&
-			samePlace && e.Lot().String() == inv.Lot().String() {
-			return apperror.Conflict("duplicate lot").WithOp("fake.Save")
-		}
-	}
-	r.byID[inv.ID()] = inv
+	r.byID[p.ID()] = p
 	return nil
 }
 
-func (r *fakeRepo) FindByID(_ context.Context, id, companyID uuid.UUID) (*entity.Inventory, error) {
+func (r *fakeRepo) FindByID(_ context.Context, positionID, companyID uuid.UUID) (*entity.InventoryPosition, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	inv, ok := r.byID[id]
-	if !ok || inv.CompanyID() != companyID {
-		return nil, apperror.NotFound("inventory not found").WithOp("fake.FindByID")
+	p, ok := r.byID[positionID]
+	// The companyID check IS the tenant filter under test.
+	if !ok || p.CompanyID() != companyID {
+		return nil, apperror.NotFound("position not found").WithOp("fake.FindByID")
 	}
-	return inv, nil
+	return p, nil
 }
 
-func (r *fakeRepo) FindByProductLocation(_ context.Context, companyID, productID, locationID uuid.UUID) ([]*entity.Inventory, error) {
+func (r *fakeRepo) FindByKey(_ context.Context, key entity.StockKey) (*entity.InventoryPosition, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var out []*entity.Inventory
-	for _, inv := range r.byID {
-		if inv.CompanyID() == companyID && inv.ProductID() == productID && inv.LocationID() == locationID {
-			out = append(out, inv)
+	for _, p := range r.byID {
+		if p.Key().Equals(key) {
+			return p, nil
 		}
 	}
-	return out, nil
+	return nil, apperror.NotFound("position not found").WithOp("fake.FindByKey")
 }
 
-func (r *fakeRepo) FindByLot(_ context.Context, companyID, productID, locationID uuid.UUID, lot string) (*entity.Inventory, error) {
+func (r *fakeRepo) List(_ context.Context, companyID uuid.UUID, filter repository.ListFilter) (pagination.Page[*entity.InventoryPosition], error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, inv := range r.byID {
-		if inv.CompanyID() == companyID && inv.ProductID() == productID &&
-			inv.LocationID() == locationID && inv.Lot().String() == lot {
-			return inv, nil
-		}
-	}
-	return nil, apperror.NotFound("not found").WithOp("fake.FindByLot")
-}
-
-func (r *fakeRepo) FindBySerial(_ context.Context, companyID, productID uuid.UUID, serial string) (*entity.Inventory, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, inv := range r.byID {
-		if inv.CompanyID() == companyID && inv.ProductID() == productID && inv.Serial().String() == serial {
-			return inv, nil
-		}
-	}
-	return nil, apperror.NotFound("not found").WithOp("fake.FindBySerial")
-}
-
-func (r *fakeRepo) List(_ context.Context, companyID uuid.UUID, filter repository.ListFilter) (pagination.Page[*entity.Inventory], error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var matched []*entity.Inventory
-	for _, inv := range r.byID {
-		if inv.CompanyID() != companyID {
+	var matched []*entity.InventoryPosition
+	for _, p := range r.byID {
+		if p.CompanyID() != companyID {
 			continue
 		}
-		if filter.Status != "" && inv.Status().String() != filter.Status {
+		if filter.WarehouseID != uuid.Nil && p.WarehouseID() != filter.WarehouseID {
 			continue
 		}
-		if filter.Tracking != "" && inv.TrackingType().String() != filter.Tracking {
+		if filter.LocationID != uuid.Nil && p.LocationID() != filter.LocationID {
 			continue
 		}
-		matched = append(matched, inv)
+		if filter.ProductID != uuid.Nil && p.ProductID() != filter.ProductID {
+			continue
+		}
+		if filter.Tracking != "" && p.Attributes().Tracking().String() != filter.Tracking {
+			continue
+		}
+		matched = append(matched, p)
 	}
 	return pagination.NewPage(matched, filter.Paging, int64(len(matched))), nil
-}
-
-func (r *fakeRepo) Exists(_ context.Context, companyID, productID, locationID uuid.UUID) (bool, error) {
-	items, _ := r.FindByProductLocation(context.Background(), companyID, productID, locationID)
-	return len(items) > 0, nil
 }
 
 func (r *fakeRepo) count() int {
@@ -148,6 +125,8 @@ func (r *fakeRepo) count() int {
 
 // ---------- transaction manager ----------
 
+// fakeTxManager simulates real transaction semantics, including ROLLBACK: it
+// snapshots the repository before running fn and restores it on error.
 type fakeTxManager struct {
 	repo      *fakeRepo
 	calls     int
@@ -172,28 +151,28 @@ func (m *fakeTxManager) RunInTransaction(ctx context.Context, fn func(context.Co
 	return nil
 }
 
-func (m *fakeTxManager) snapshot() map[uuid.UUID]*entity.Inventory {
-	snap := map[uuid.UUID]*entity.Inventory{}
+func (m *fakeTxManager) snapshot() map[uuid.UUID]*entity.InventoryPosition {
+	snap := map[uuid.UUID]*entity.InventoryPosition{}
 	if m.repo == nil {
 		return snap
 	}
 	m.repo.mu.Lock()
 	defer m.repo.mu.Unlock()
-	for id, inv := range m.repo.byID {
-		snap[id] = inv
+	for id, p := range m.repo.byID {
+		snap[id] = p
 	}
 	return snap
 }
 
-func (m *fakeTxManager) restore(snap map[uuid.UUID]*entity.Inventory) {
+func (m *fakeTxManager) restore(snap map[uuid.UUID]*entity.InventoryPosition) {
 	if m.repo == nil {
 		return
 	}
 	m.repo.mu.Lock()
 	defer m.repo.mu.Unlock()
-	m.repo.byID = map[uuid.UUID]*entity.Inventory{}
-	for id, inv := range snap {
-		m.repo.byID[id] = inv
+	m.repo.byID = map[uuid.UUID]*entity.InventoryPosition{}
+	for id, p := range snap {
+		m.repo.byID[id] = p
 	}
 }
 
@@ -233,34 +212,37 @@ func (p *fakeEventPublisher) reset() {
 	p.events = nil
 }
 
-// ---------- providers ----------
+// ---------- verifiers ----------
 
-type rejectingProductProvider struct{ calls int }
+type rejectingProductVerifier struct{ calls int }
 
-func (p *rejectingProductProvider) VerifyProduct(context.Context, uuid.UUID, uuid.UUID) error {
-	p.calls++
+func (v *rejectingProductVerifier) VerifyProduct(context.Context, uuid.UUID, uuid.UUID) error {
+	v.calls++
 	return apperror.Validation("no such product")
 }
 
-type rejectingWarehouseProvider struct{ calls int }
+type rejectingWarehouseVerifier struct{ calls int }
 
-func (p *rejectingWarehouseProvider) VerifyWarehouse(context.Context, uuid.UUID, uuid.UUID) error {
-	p.calls++
+func (v *rejectingWarehouseVerifier) VerifyWarehouse(context.Context, uuid.UUID, uuid.UUID) error {
+	v.calls++
 	return apperror.Validation("no such warehouse")
 }
 
-type rejectingLocationProvider struct{ calls int }
+type rejectingLocationVerifier struct{ calls int }
 
-func (p *rejectingLocationProvider) VerifyLocation(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error {
-	p.calls++
+func (v *rejectingLocationVerifier) VerifyLocation(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error {
+	v.calls++
 	return apperror.Validation("no such location")
 }
 
-// blockingReservationProvider reports active reservations, standing in for the
-// future Reservation module refusing a stock removal.
-type blockingReservationProvider struct{ calls int }
+// quarantineOnReceipt is a policy that always demands a hold on receipt.
+type quarantineOnReceipt struct{ calls int }
 
-func (p *blockingReservationProvider) HasActiveReservations(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
+func (p *quarantineOnReceipt) AllowNegativeStock(context.Context, uuid.UUID) (bool, error) {
+	return false, nil
+}
+
+func (p *quarantineOnReceipt) RequireQuarantineOnReceipt(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
 	p.calls++
 	return true, nil
 }

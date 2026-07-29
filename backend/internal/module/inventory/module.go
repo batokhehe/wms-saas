@@ -24,7 +24,6 @@ import (
 
 	"github.com/batokhehe/wms-saas/backend/internal/middleware"
 	"github.com/batokhehe/wms-saas/backend/internal/module/inventory/handler"
-	"github.com/batokhehe/wms-saas/backend/internal/module/inventory/port"
 	"github.com/batokhehe/wms-saas/backend/internal/module/inventory/repository"
 	"github.com/batokhehe/wms-saas/backend/internal/module/inventory/route"
 	"github.com/batokhehe/wms-saas/backend/internal/module/inventory/service"
@@ -54,10 +53,13 @@ type Config struct {
 	Companies   middleware.CompanyResolver
 	Permissions middleware.PermissionResolver
 
-	Products     port.ProductProvider
-	Warehouses   port.WarehouseProvider
-	Locations    port.LocationProvider
-	Reservations port.ReservationProvider
+	Products   service.ProductVerifier
+	Warehouses service.WarehouseVerifier
+	Locations  service.LocationVerifier
+
+	// Policy is the per-company stock policy seam. Nil means the conservative
+	// DefaultStockPolicy.
+	Policy service.StockPolicyProvider
 }
 
 // New constructs the module and its internal dependency graph.
@@ -72,7 +74,7 @@ func New(deps module.Dependencies, cfg Config) *Module {
 
 	svc := service.New(
 		repo,
-		cfg.Products, cfg.Warehouses, cfg.Locations, cfg.Reservations,
+		cfg.Products, cfg.Warehouses, cfg.Locations, cfg.Policy,
 		deps.Clock, deps.IDs, deps.Tx, events,
 	)
 

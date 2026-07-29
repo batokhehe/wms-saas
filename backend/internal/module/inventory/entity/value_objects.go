@@ -1,53 +1,37 @@
-// Package entity holds the Inventory aggregate, its value objects and its
-// events.
+// Package entity holds the InventoryPosition aggregate, its value objects and
+// its events.
 //
 // LAYER RULE: entity imports nothing from this project except pkg/apperror and
-// the shared identity/uuid types, and nothing from any web or persistence
-// framework. It is the innermost layer.
+// the shared identity types, and nothing from any web or persistence framework.
 //
-// Inventory is the current state of ONE Product inside ONE Storage Location. It
-// is not a stock ledger row — it owns every stock transition, and nothing
-// outside the aggregate may mutate a quantity. Every behaviour on the aggregate
-// preserves the invariants documented in inventory.go.
+// An InventoryPosition is the stock of ONE product, with ONE set of stock
+// attributes, in ONE storage location. It owns every stock transition; nothing
+// outside the aggregate moves a quantity.
 package entity
 
 import (
 	"math"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/batokhehe/wms-saas/backend/pkg/apperror"
 )
 
 // ---------------------------------------------------------------------------
-// Quantities
+// Quantity
 // ---------------------------------------------------------------------------
-//
-// Quantities are exact non-negative integers (counts of base units). Integers,
-// not float64: a WMS adds and subtracts these thousands of times a day, and
-// binary floating point accumulates error on every operation until an
-// availability check passes when it should fail. Every arithmetic helper guards
-// against negativity and against int64 overflow, so no behaviour can silently
-// wrap a count.
-//
-// The three storage roles are DISTINCT types — InventoryQuantity (on hand),
-// ReservedQuantity, AvailableQuantity — so a caller cannot pass a reserved count
-// where an on-hand count is expected. Movement amounts use the separate
-// Quantity, which is strictly POSITIVE: a zero-amount movement is a no-op that
-// must not raise an event, and a negative one is a different behaviour
-// (Increase vs Decrease).
 
-// addInt64 adds two counts, rejecting overflow. b is expected non-negative.
-func addInt64(a, b int64) (int64, error) {
-	if b > 0 && a > math.MaxInt64-b {
-		return 0, apperror.Validation("quantity would overflow")
-	}
-	return a + b, nil
-}
-
-// Quantity is a positive movement amount — the delta a behaviour applies.
+// Quantity is a strictly positive movement amount — the delta a behaviour
+// applies. Zero is rejected because a zero-amount movement is a no-op that must
+// not raise an event, and negative is a different behaviour (Receive vs Issue).
+//
+// Integers, not float64: a WMS adds and subtracts these thousands of times a
+// day, and binary floating point accumulates error until an availability check
+// passes when it should fail.
 type Quantity struct{ value int64 }
 
-// NewQuantity builds a movement amount. It must be strictly positive.
+// NewQuantity builds a movement amount.
 func NewQuantity(v int64) (Quantity, error) {
 	if v <= 0 {
 		return Quantity{}, apperror.Validation("movement quantity must be greater than zero")
@@ -67,110 +51,66 @@ func MustQuantity(v int64) Quantity {
 // Value returns the underlying count.
 func (q Quantity) Value() int64 { return q.value }
 
-// InventoryQuantity is an on-hand count. Non-negative.
-type InventoryQuantity struct{ value int64 }
+// ---------------------------------------------------------------------------
+// QuantityBucket
+// ---------------------------------------------------------------------------
 
-// NewInventoryQuantity builds an on-hand count, rejecting a negative value.
-func NewInventoryQuantity(v int64) (InventoryQuantity, error) {
+// QuantityBucket is one non-negative balance inside a position: available,
+// reserved, allocated or quarantined.
+//
+// # Why one type for four balances
+//
+// Every bucket obeys identical arithmetic: never negative, never overflowing,
+// and only ever changed by adding or subtracting a positive Quantity. Expressing
+// that once means the aggregate's transitions are a sequence of bucket moves it
+// cannot get wrong, rather than four hand-written int64 updates that must each
+// remember the same guards.
+type QuantityBucket struct{ value int64 }
+
+// NewQuantityBucket builds a bucket balance, rejecting a negative value.
+func NewQuantityBucket(v int64) (QuantityBucket, error) {
 	if v < 0 {
-		return InventoryQuantity{}, apperror.Validation("on-hand quantity cannot be negative")
+		return QuantityBucket{}, apperror.Validation("quantity bucket cannot be negative")
 	}
-	return InventoryQuantity{value: v}, nil
+	return QuantityBucket{value: v}, nil
 }
 
-// MustInventoryQuantity is the panicking constructor, for tests.
-func MustInventoryQuantity(v int64) InventoryQuantity {
-	q, err := NewInventoryQuantity(v)
+// MustQuantityBucket is the panicking constructor, for tests.
+func MustQuantityBucket(v int64) QuantityBucket {
+	b, err := NewQuantityBucket(v)
 	if err != nil {
 		panic(err)
 	}
-	return q
+	return b
 }
 
-// Value returns the underlying count.
-func (q InventoryQuantity) Value() int64 { return q.value }
+// EmptyBucket is a zero balance.
+func EmptyBucket() QuantityBucket { return QuantityBucket{} }
 
-// IsZero reports whether the count is zero.
-func (q InventoryQuantity) IsZero() bool { return q.value == 0 }
+// Value returns the balance.
+func (b QuantityBucket) Value() int64 { return b.value }
 
-// add returns on-hand increased by a movement amount, guarding overflow.
-func (q InventoryQuantity) add(amount Quantity) (InventoryQuantity, error) {
-	sum, err := addInt64(q.value, amount.value)
-	if err != nil {
-		return InventoryQuantity{}, err
+// IsZero reports whether the bucket is empty.
+func (b QuantityBucket) IsZero() bool { return b.value == 0 }
+
+// Covers reports whether the bucket holds at least amount.
+func (b QuantityBucket) Covers(amount Quantity) bool { return b.value >= amount.value }
+
+// Add returns the bucket increased by amount, guarding int64 overflow so a count
+// can never silently wrap to a negative balance.
+func (b QuantityBucket) Add(amount Quantity) (QuantityBucket, error) {
+	if b.value > math.MaxInt64-amount.value {
+		return QuantityBucket{}, apperror.Validation("quantity would overflow")
 	}
-	return InventoryQuantity{value: sum}, nil
+	return QuantityBucket{value: b.value + amount.value}, nil
 }
 
-// sub returns on-hand decreased by a movement amount, rejecting a result below
-// zero.
-func (q InventoryQuantity) sub(amount Quantity) (InventoryQuantity, error) {
-	if amount.value > q.value {
-		return InventoryQuantity{}, apperror.Conflict("insufficient on-hand quantity")
+// Sub returns the bucket decreased by amount, refusing to go below zero.
+func (b QuantityBucket) Sub(amount Quantity) (QuantityBucket, error) {
+	if !b.Covers(amount) {
+		return QuantityBucket{}, apperror.Conflict("insufficient quantity in bucket")
 	}
-	return InventoryQuantity{value: q.value - amount.value}, nil
-}
-
-// coversReserved reports whether this on-hand count is at least the reserved
-// count — the OnHand >= Reserved invariant.
-func (q InventoryQuantity) coversReserved(r ReservedQuantity) bool {
-	return q.value >= r.value
-}
-
-// ReservedQuantity is a reserved (promised-but-not-yet-shipped) count.
-// Non-negative.
-type ReservedQuantity struct{ value int64 }
-
-// NewReservedQuantity builds a reserved count, rejecting a negative value.
-func NewReservedQuantity(v int64) (ReservedQuantity, error) {
-	if v < 0 {
-		return ReservedQuantity{}, apperror.Validation("reserved quantity cannot be negative")
-	}
-	return ReservedQuantity{value: v}, nil
-}
-
-// Value returns the underlying count.
-func (q ReservedQuantity) Value() int64 { return q.value }
-
-// IsZero reports whether nothing is reserved.
-func (q ReservedQuantity) IsZero() bool { return q.value == 0 }
-
-// add returns reserved increased by a movement amount, guarding overflow.
-func (q ReservedQuantity) add(amount Quantity) (ReservedQuantity, error) {
-	sum, err := addInt64(q.value, amount.value)
-	if err != nil {
-		return ReservedQuantity{}, err
-	}
-	return ReservedQuantity{value: sum}, nil
-}
-
-// sub returns reserved decreased by a movement amount, rejecting a result below
-// zero.
-func (q ReservedQuantity) sub(amount Quantity) (ReservedQuantity, error) {
-	if amount.value > q.value {
-		return ReservedQuantity{}, apperror.Conflict("cannot release more than is reserved")
-	}
-	return ReservedQuantity{value: q.value - amount.value}, nil
-}
-
-// AvailableQuantity is on-hand minus reserved — what may be freshly reserved,
-// picked or transferred. Non-negative by construction, since the aggregate
-// upholds OnHand >= Reserved.
-type AvailableQuantity struct{ value int64 }
-
-// Value returns the underlying count.
-func (q AvailableQuantity) Value() int64 { return q.value }
-
-// IsZero reports whether nothing is available.
-func (q AvailableQuantity) IsZero() bool { return q.value == 0 }
-
-// covers reports whether at least amount is available.
-func (q AvailableQuantity) covers(amount Quantity) bool { return q.value >= amount.value }
-
-// available computes AvailableQuantity from an on-hand and a reserved count. It
-// is the single place the derivation lives.
-func available(onHand InventoryQuantity, reserved ReservedQuantity) AvailableQuantity {
-	return AvailableQuantity{value: onHand.value - reserved.value}
+	return QuantityBucket{value: b.value - amount.value}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -178,15 +118,16 @@ func available(onHand InventoryQuantity, reserved ReservedQuantity) AvailableQua
 // ---------------------------------------------------------------------------
 
 // TrackingType is how the stock of a product is individuated.
-//
-//   - NONE:   a single fungible pool per product per location.
-//   - LOT:    one record per lot (batch), so expiry and recall are traceable.
-//   - SERIAL: one record per serial, quantity always exactly one.
 type TrackingType string
 
 const (
-	TrackingNone   TrackingType = "NONE"
-	TrackingLot    TrackingType = "LOT"
+	// TrackingNone is a single fungible pool per product per location.
+	TrackingNone TrackingType = "NONE"
+
+	// TrackingLot is one position per batch, so expiry and recall are traceable.
+	TrackingLot TrackingType = "LOT"
+
+	// TrackingSerial is one position per unit; its on-hand never exceeds one.
 	TrackingSerial TrackingType = "SERIAL"
 )
 
@@ -198,43 +139,11 @@ func (t TrackingType) Valid() bool {
 // String renders the tracking type.
 func (t TrackingType) String() string { return string(t) }
 
-// RequiresLot reports whether a lot number is mandatory for this type.
-func (t TrackingType) RequiresLot() bool { return t == TrackingLot }
-
-// RequiresSerial reports whether a serial number is mandatory for this type.
-func (t TrackingType) RequiresSerial() bool { return t == TrackingSerial }
-
-// ---------------------------------------------------------------------------
-// InventoryStatus
-// ---------------------------------------------------------------------------
-
-// InventoryStatus is the availability state of an inventory record. The state
-// machine is deliberately minimal: ACTIVE <-> LOCKED, no other transitions.
-type InventoryStatus string
-
-const (
-	// StatusActive is the normal state: every behaviour is permitted.
-	StatusActive InventoryStatus = "ACTIVE"
-
-	// StatusLocked freezes the record — no quantity may move — while a
-	// governance hold, an investigation or a count is in progress.
-	StatusLocked InventoryStatus = "LOCKED"
-)
-
-// Valid reports whether the status is a known value.
-func (s InventoryStatus) Valid() bool {
-	return s == StatusActive || s == StatusLocked
-}
-
-// String renders the status.
-func (s InventoryStatus) String() string { return string(s) }
-
 // ---------------------------------------------------------------------------
 // LotNumber and SerialNumber
 // ---------------------------------------------------------------------------
 
-// LotNumber identifies a batch. Its zero value means "no lot", which is the
-// correct state for NONE and SERIAL tracking.
+// LotNumber identifies a batch. Its zero value means "no lot".
 type LotNumber struct{ value string }
 
 // NewLotNumber builds a lot number, trimming and length-checking it.
@@ -275,3 +184,150 @@ func (s SerialNumber) String() string { return s.value }
 
 // IsZero reports whether no serial is set.
 func (s SerialNumber) IsZero() bool { return s.value == "" }
+
+// ---------------------------------------------------------------------------
+// StockAttributes
+// ---------------------------------------------------------------------------
+
+// StockAttributes is what individuates stock of the same product in the same
+// place: how it is tracked, and the lot or serial that names it.
+//
+// It is a value object rather than three loose fields because the three are only
+// ever valid TOGETHER — a LOT position without a lot number, or a NONE position
+// carrying a serial, is not a partially-built position but a contradiction. The
+// constructor is the single place that rule is enforced, so no aggregate method
+// has to re-check it.
+type StockAttributes struct {
+	tracking TrackingType
+	lot      LotNumber
+	serial   SerialNumber
+}
+
+// NewStockAttributes composes and validates the tracking triple.
+func NewStockAttributes(tracking TrackingType, lot LotNumber, serial SerialNumber) (StockAttributes, error) {
+	if !tracking.Valid() {
+		return StockAttributes{}, apperror.Validation("invalid tracking type")
+	}
+	switch tracking {
+	case TrackingNone:
+		if !lot.IsZero() || !serial.IsZero() {
+			return StockAttributes{}, apperror.Validation("untracked stock must not carry a lot or serial number")
+		}
+	case TrackingLot:
+		if lot.IsZero() {
+			return StockAttributes{}, apperror.Validation("lot-tracked stock requires a lot number")
+		}
+		if !serial.IsZero() {
+			return StockAttributes{}, apperror.Validation("lot-tracked stock must not carry a serial number")
+		}
+	case TrackingSerial:
+		if serial.IsZero() {
+			return StockAttributes{}, apperror.Validation("serial-tracked stock requires a serial number")
+		}
+		if !lot.IsZero() {
+			return StockAttributes{}, apperror.Validation("serial-tracked stock must not carry a lot number")
+		}
+	}
+	return StockAttributes{tracking: tracking, lot: lot, serial: serial}, nil
+}
+
+// UntrackedAttributes is the attribute set of a fungible pool.
+func UntrackedAttributes() StockAttributes {
+	return StockAttributes{tracking: TrackingNone}
+}
+
+// Tracking returns how the stock is individuated.
+func (a StockAttributes) Tracking() TrackingType { return a.tracking }
+
+// Lot returns the lot number, or its zero value.
+func (a StockAttributes) Lot() LotNumber { return a.lot }
+
+// Serial returns the serial number, or its zero value.
+func (a StockAttributes) Serial() SerialNumber { return a.serial }
+
+// HasLot reports whether a lot number is set.
+func (a StockAttributes) HasLot() bool { return !a.lot.IsZero() }
+
+// HasSerial reports whether a serial number is set.
+func (a StockAttributes) HasSerial() bool { return !a.serial.IsZero() }
+
+// IsSerialised reports whether this stock is tracked one unit at a time.
+func (a StockAttributes) IsSerialised() bool { return a.tracking == TrackingSerial }
+
+// Equals reports whether two attribute sets name the same stock.
+func (a StockAttributes) Equals(other StockAttributes) bool {
+	return a.tracking == other.tracking &&
+		a.lot.value == other.lot.value &&
+		a.serial.value == other.serial.value
+}
+
+// ---------------------------------------------------------------------------
+// StockKey
+// ---------------------------------------------------------------------------
+
+// StockKey is the full address of a position: the tenant that owns it, the
+// warehouse and location it sits in, the product it is of, and the attributes
+// that individuate it.
+//
+// It is the aggregate's natural key. Making it one value object means "a
+// position is identified by ALL of these together" is expressible in a signature
+// — the repository's get-or-create takes a StockKey, not six loose arguments in
+// an order a caller can transpose.
+type StockKey struct {
+	companyID   uuid.UUID
+	warehouseID uuid.UUID
+	locationID  uuid.UUID
+	productID   uuid.UUID
+	attributes  StockAttributes
+}
+
+// NewStockKey composes a stock key, requiring every identifier.
+func NewStockKey(
+	companyID, warehouseID, locationID, productID uuid.UUID,
+	attributes StockAttributes,
+) (StockKey, error) {
+	if companyID == uuid.Nil || warehouseID == uuid.Nil ||
+		locationID == uuid.Nil || productID == uuid.Nil {
+		return StockKey{}, apperror.Validation("company, warehouse, location and product ids are required")
+	}
+	if !attributes.tracking.Valid() {
+		return StockKey{}, apperror.Validation("invalid stock attributes")
+	}
+	return StockKey{
+		companyID:   companyID,
+		warehouseID: warehouseID,
+		locationID:  locationID,
+		productID:   productID,
+		attributes:  attributes,
+	}, nil
+}
+
+// CompanyID returns the owning tenant.
+func (k StockKey) CompanyID() uuid.UUID { return k.companyID }
+
+// WarehouseID returns the warehouse.
+func (k StockKey) WarehouseID() uuid.UUID { return k.warehouseID }
+
+// LocationID returns the storage location.
+func (k StockKey) LocationID() uuid.UUID { return k.locationID }
+
+// ProductID returns the product.
+func (k StockKey) ProductID() uuid.UUID { return k.productID }
+
+// Attributes returns the individuating attributes.
+func (k StockKey) Attributes() StockAttributes { return k.attributes }
+
+// Equals reports whether two keys address the same position.
+func (k StockKey) Equals(other StockKey) bool {
+	return k.companyID == other.companyID &&
+		k.warehouseID == other.warehouseID &&
+		k.locationID == other.locationID &&
+		k.productID == other.productID &&
+		k.attributes.Equals(other.attributes)
+}
+
+// WithLocation returns a copy of the key addressing a different location. It is
+// how a transfer names its destination: same product, same attributes, new place.
+func (k StockKey) WithLocation(warehouseID, locationID uuid.UUID) (StockKey, error) {
+	return NewStockKey(k.companyID, warehouseID, locationID, k.productID, k.attributes)
+}

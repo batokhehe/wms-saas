@@ -1,8 +1,8 @@
 // Package route declares the inventory module's URL layout.
 //
-// This file is the module's authorisation policy. Every route states the
-// permission it requires, so "who can do this?" is answered by reading one short
-// file rather than by grepping handlers for scattered checks.
+// This file is the module's authorisation policy: every route states the
+// permission it requires, so "who can move stock?" is answered by reading one
+// short file rather than by grepping handlers.
 package route
 
 import (
@@ -14,22 +14,14 @@ import (
 )
 
 // RegisterV1 mounts the module under /api/v1.
-//
-// The middleware chain is the platform's full stack:
-//
-//	Authenticate      → WHO the caller is
-//	ResolveCompany    → WHERE they are acting
-//	RequireCompany    → refuse if nowhere
-//	LoadPermissions   → WHAT they may do there
-//	RequirePermission → per route
 func RegisterV1(
 	rg *gin.RouterGroup,
-	inventories *handler.Handler,
+	positions *handler.Handler,
 	verifier middleware.TokenVerifier,
 	companies middleware.CompanyResolver,
 	permissions middleware.PermissionResolver,
 ) {
-	scoped := rg.Group("/inventories")
+	scoped := rg.Group("/inventory-positions")
 	scoped.Use(
 		middleware.Authenticate(verifier),
 		middleware.ResolveCompany(companies),
@@ -40,68 +32,63 @@ func RegisterV1(
 	{
 		scoped.GET("",
 			middleware.RequirePermission(entity.PermissionRead),
-			inventories.List)
-
-		scoped.POST("",
-			middleware.RequirePermission(entity.PermissionCreate),
-			inventories.Create)
+			positions.List)
 
 		scoped.GET("/:id",
 			middleware.RequirePermission(entity.PermissionRead),
-			inventories.Get)
+			positions.Get)
 
-		// ---------- Quantity movements ----------
+		// Receiving opens a position when none exists, so it is addressed by stock
+		// KEY and carries the create permission.
+		scoped.POST("/receive",
+			middleware.RequirePermission(entity.PermissionCreate),
+			positions.Receive)
+
+		// ---------- Quantity movement ----------
+		scoped.POST("/:id/issue",
+			middleware.RequirePermission(entity.PermissionUpdate),
+			positions.Issue)
+
+		// ---------- Reservation and allocation ----------
 		//
-		// Increase and decrease are routine stock movement, so they share
-		// inventory.update. Reserving, transferring, adjusting, locking and
-		// counting each require their own permission because each is a distinct
-		// operational decision with a different blast radius.
-		scoped.POST("/:id/increase",
-			middleware.RequirePermission(entity.PermissionUpdate),
-			inventories.Increase)
-
-		scoped.POST("/:id/decrease",
-			middleware.RequirePermission(entity.PermissionUpdate),
-			inventories.Decrease)
-
-		// ---------- Reservations ----------
+		// Allocation hardens a reservation, so both stages share the reserve
+		// permission: whoever may promise stock may also assign the promise.
 		scoped.POST("/:id/reserve",
 			middleware.RequirePermission(entity.PermissionReserve),
-			inventories.Reserve)
+			positions.Reserve)
 
 		scoped.POST("/:id/release",
 			middleware.RequirePermission(entity.PermissionReserve),
-			inventories.Release)
+			positions.Release)
 
-		// ---------- Transfers ----------
-		scoped.POST("/:id/transfer-out",
+		scoped.POST("/:id/allocate",
+			middleware.RequirePermission(entity.PermissionReserve),
+			positions.Allocate)
+
+		scoped.POST("/:id/deallocate",
+			middleware.RequirePermission(entity.PermissionReserve),
+			positions.Deallocate)
+
+		// ---------- Quarantine ----------
+		scoped.POST("/:id/quarantine",
+			middleware.RequirePermission(entity.PermissionLock),
+			positions.Quarantine)
+
+		scoped.POST("/:id/release-quarantine",
+			middleware.RequirePermission(entity.PermissionLock),
+			positions.ReleaseQuarantine)
+
+		// ---------- Transfer ----------
+		scoped.POST("/:id/transfer",
 			middleware.RequirePermission(entity.PermissionTransfer),
-			inventories.TransferOut)
+			positions.Transfer)
 
-		scoped.POST("/:id/transfer-in",
-			middleware.RequirePermission(entity.PermissionTransfer),
-			inventories.TransferIn)
-
-		// ---------- Corrections ----------
+		// ---------- Correction ----------
 		//
-		// Adjustment overrides the recorded count with no physical count behind
-		// it, so it requires its own governance-sensitive permission — distinct
-		// from a cycle count, which reconciles to a real count.
+		// An adjustment overrides the recorded count, so it keeps its own
+		// governance-sensitive permission — distinct from routine movement.
 		scoped.POST("/:id/adjust",
 			middleware.RequirePermission(entity.PermissionAdjust),
-			inventories.Adjust)
-
-		scoped.POST("/:id/cycle-count",
-			middleware.RequirePermission(entity.PermissionCycleCount),
-			inventories.CycleCount)
-
-		// ---------- Governance hold ----------
-		scoped.POST("/:id/lock",
-			middleware.RequirePermission(entity.PermissionLock),
-			inventories.Lock)
-
-		scoped.POST("/:id/unlock",
-			middleware.RequirePermission(entity.PermissionLock),
-			inventories.Unlock)
+			positions.Adjust)
 	}
 }

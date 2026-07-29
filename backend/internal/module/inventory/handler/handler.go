@@ -1,9 +1,8 @@
 // Package handler is the inventory module's HTTP layer.
 //
 // LAYER RULE: bind input, call the service, shape the response, return. No method
-// contains a permission check, a status comparison or a business rule.
-// Authorisation is declared in route/route.go; business rules are in the
-// aggregate.
+// contains a permission check, a bucket comparison or a business rule.
+// Authorisation is declared in route/route.go; the rules are in the aggregate.
 package handler
 
 import (
@@ -29,164 +28,151 @@ func New(svc *service.Service) *Handler {
 	return &Handler{service: svc}
 }
 
-// Create handles POST /inventories.
-func (h *Handler) Create(c *gin.Context) {
-	var req dto.CreateInventoryRequest
+// Receive handles POST /inventory-positions/receive. It is the one operation
+// addressed by stock KEY rather than by position id, because the position may not
+// exist yet.
+func (h *Handler) Receive(c *gin.Context) {
+	var req dto.ReceiveStockRequest
 	if err := validator.BindJSON(c, &req); err != nil {
 		response.Error(c, err)
 		return
 	}
-	result, err := h.service.CreateInventory(appcontext.Context(c), req)
+	result, err := h.service.ReceiveStock(appcontext.Context(c), req)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
-	response.Created(c, "Inventory created successfully", result)
+	response.Created(c, "Stock received successfully", result)
 }
 
-// List handles GET /inventories.
-func (h *Handler) List(c *gin.Context) {
-	var query dto.ListInventoriesQuery
-	if err := validator.BindQuery(c, &query); err != nil {
-		response.Error(c, err)
-		return
-	}
-	page, err := h.service.ListInventory(appcontext.Context(c), query)
-	if err != nil {
-		response.Error(c, err)
-		return
-	}
-	response.Page(c, "Inventory retrieved successfully", page)
+// Issue handles POST /inventory-positions/:id/issue.
+func (h *Handler) Issue(c *gin.Context) {
+	h.quantityOp(c, "Stock issued successfully", h.service.IssueStock)
 }
 
-// Get handles GET /inventories/:id.
-func (h *Handler) Get(c *gin.Context) {
-	id, ok := h.param(c)
-	if !ok {
-		return
-	}
-	result, err := h.service.GetInventory(appcontext.Context(c), id)
-	if err != nil {
-		response.Error(c, err)
-		return
-	}
-	response.OK(c, "Inventory retrieved successfully", result)
-}
-
-// Increase handles POST /inventories/:id/increase.
-func (h *Handler) Increase(c *gin.Context) {
-	h.quantityOp(c, "Inventory increased successfully", h.service.IncreaseInventory)
-}
-
-// Decrease handles POST /inventories/:id/decrease.
-func (h *Handler) Decrease(c *gin.Context) {
-	h.quantityOp(c, "Inventory decreased successfully", h.service.DecreaseInventory)
-}
-
-// Reserve handles POST /inventories/:id/reserve.
+// Reserve handles POST /inventory-positions/:id/reserve.
 func (h *Handler) Reserve(c *gin.Context) {
-	h.quantityOp(c, "Inventory reserved successfully", h.service.ReserveInventory)
+	h.quantityOp(c, "Stock reserved successfully", h.service.ReserveStock)
 }
 
-// Release handles POST /inventories/:id/release.
+// Release handles POST /inventory-positions/:id/release.
 func (h *Handler) Release(c *gin.Context) {
 	h.quantityOp(c, "Reservation released successfully", h.service.ReleaseReservation)
 }
 
-// TransferOut handles POST /inventories/:id/transfer-out.
-func (h *Handler) TransferOut(c *gin.Context) {
-	h.quantityOp(c, "Inventory transferred out successfully", h.service.TransferOut)
+// Allocate handles POST /inventory-positions/:id/allocate.
+func (h *Handler) Allocate(c *gin.Context) {
+	h.quantityOp(c, "Stock allocated successfully", h.service.AllocateStock)
 }
 
-// TransferIn handles POST /inventories/:id/transfer-in.
-func (h *Handler) TransferIn(c *gin.Context) {
-	h.quantityOp(c, "Inventory transferred in successfully", h.service.TransferIn)
+// Deallocate handles POST /inventory-positions/:id/deallocate.
+func (h *Handler) Deallocate(c *gin.Context) {
+	h.quantityOp(c, "Stock deallocated successfully", h.service.DeallocateStock)
 }
 
-// Adjust handles POST /inventories/:id/adjust.
+// Quarantine handles POST /inventory-positions/:id/quarantine.
+func (h *Handler) Quarantine(c *gin.Context) {
+	h.quantityOp(c, "Stock moved to quarantine successfully", h.service.MoveToQuarantine)
+}
+
+// ReleaseQuarantine handles POST /inventory-positions/:id/release-quarantine.
+func (h *Handler) ReleaseQuarantine(c *gin.Context) {
+	h.quantityOp(c, "Stock released from quarantine successfully", h.service.ReleaseFromQuarantine)
+}
+
+// Transfer handles POST /inventory-positions/:id/transfer.
+func (h *Handler) Transfer(c *gin.Context) {
+	id, ok := h.param(c)
+	if !ok {
+		return
+	}
+	var req dto.TransferStockRequest
+	if err := validator.BindJSON(c, &req); err != nil {
+		response.Error(c, err)
+		return
+	}
+	// The path identifies the origin, so the body cannot disagree with the URL.
+	req.FromPositionID = id
+
+	result, err := h.service.TransferStock(appcontext.Context(c), req)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, "Stock transferred successfully", result)
+}
+
+// Adjust handles POST /inventory-positions/:id/adjust.
 func (h *Handler) Adjust(c *gin.Context) {
 	id, ok := h.param(c)
 	if !ok {
 		return
 	}
-	var req dto.AdjustInventoryRequest
+	var req dto.AdjustStockRequest
 	if err := validator.BindJSON(c, &req); err != nil {
 		response.Error(c, err)
 		return
 	}
-	result, err := h.service.AdjustInventory(appcontext.Context(c), id, req)
+	req.PositionID = id
+
+	result, err := h.service.AdjustStock(appcontext.Context(c), req)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
-	response.OK(c, "Inventory adjusted successfully", result)
+	response.OK(c, "Stock adjusted successfully", result)
 }
 
-// CycleCount handles POST /inventories/:id/cycle-count.
-func (h *Handler) CycleCount(c *gin.Context) {
+// Get handles GET /inventory-positions/:id.
+func (h *Handler) Get(c *gin.Context) {
 	id, ok := h.param(c)
 	if !ok {
 		return
 	}
-	var req dto.CycleCountRequest
-	if err := validator.BindJSON(c, &req); err != nil {
-		response.Error(c, err)
-		return
-	}
-	result, err := h.service.CompleteCycleCount(appcontext.Context(c), id, req)
+	result, err := h.service.GetInventoryPosition(appcontext.Context(c), id)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
-	response.OK(c, "Cycle count completed successfully", result)
+	response.OK(c, "Inventory position retrieved successfully", result)
 }
 
-// Lock handles POST /inventories/:id/lock.
-func (h *Handler) Lock(c *gin.Context) {
-	id, ok := h.param(c)
-	if !ok {
+// List handles GET /inventory-positions.
+func (h *Handler) List(c *gin.Context) {
+	var query dto.ListPositionsQuery
+	if err := validator.BindQuery(c, &query); err != nil {
+		response.Error(c, err)
 		return
 	}
-	result, err := h.service.LockInventory(appcontext.Context(c), id)
+	page, err := h.service.ListInventoryPositions(appcontext.Context(c), query)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
-	response.OK(c, "Inventory locked successfully", result)
-}
-
-// Unlock handles POST /inventories/:id/unlock.
-func (h *Handler) Unlock(c *gin.Context) {
-	id, ok := h.param(c)
-	if !ok {
-		return
-	}
-	result, err := h.service.UnlockInventory(appcontext.Context(c), id)
-	if err != nil {
-		response.Error(c, err)
-		return
-	}
-	response.OK(c, "Inventory unlocked successfully", result)
+	response.Page(c, "Inventory positions retrieved successfully", page)
 }
 
 // quantityOp is the shared shape of every endpoint whose body is a single
-// movement amount. It binds the amount, calls the operation, and writes the
-// response, so the six of them do not repeat the same six lines.
+// movement amount against the position named in the path. It binds the amount,
+// calls the operation and writes the response, so the seven of them do not repeat
+// the same lines.
 func (h *Handler) quantityOp(
 	c *gin.Context,
 	message string,
-	op func(ctx context.Context, id uuid.UUID, req dto.QuantityRequest) (dto.InventoryResponse, error),
+	op func(ctx context.Context, req dto.PositionQuantityRequest) (dto.PositionResponse, error),
 ) {
 	id, ok := h.param(c)
 	if !ok {
 		return
 	}
-	var req dto.QuantityRequest
+	var req dto.PositionQuantityRequest
 	if err := validator.BindJSON(c, &req); err != nil {
 		response.Error(c, err)
 		return
 	}
-	result, err := op(appcontext.Context(c), id, req)
+	req.PositionID = id
+
+	result, err := op(appcontext.Context(c), req)
 	if err != nil {
 		response.Error(c, err)
 		return

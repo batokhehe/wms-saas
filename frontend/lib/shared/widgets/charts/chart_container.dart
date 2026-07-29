@@ -27,14 +27,14 @@ class ChartContainer extends StatelessWidget {
     action: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (filter != null) filter!,
+        ?filter,
         if (onRefresh != null)
           IconButton(
             tooltip: 'Refresh',
             onPressed: onRefresh,
             icon: const Icon(Icons.refresh),
           ),
-        if (actions != null) actions!,
+        ?actions,
       ],
     ),
     child: SizedBox(

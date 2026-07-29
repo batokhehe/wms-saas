@@ -5,6 +5,12 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../../../core/network/api_client.dart';
 import '../../domain/entities/current_user.dart';
 
+// Feature modules reach the HTTP client through this controller, so the type
+// itself has to travel with the providers declared below. `apiClientProvider` is
+// deliberately NOT re-exported: the one declared here is the app's, and
+// exporting the other would make which instance you get depend on import order.
+export '../../../../core/network/api_client.dart' show ApiClient, apiError;
+
 final tokenStorageProvider = Provider(
   (ref) => TokenStorage(const FlutterSecureStorage()),
 );
@@ -58,7 +64,10 @@ class AuthController extends AsyncNotifier<CurrentUser?> {
     if (refresh != null) {
       try {
         await _api.dio.post('/auth/logout', data: {'refresh_token': refresh});
-      } on DioException {}
+      } on DioException {
+        // A failed server-side revocation must not block the local sign-out:
+        // the tokens are cleared below either way.
+      }
     }
     await _tokens.clear();
     state = const AsyncData(null);

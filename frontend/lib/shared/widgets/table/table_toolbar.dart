@@ -31,7 +31,7 @@ class TableToolbar extends StatelessWidget {
         width: AppSpacing.xxxl * 4,
         child: AppSearchField(onChanged: onSearch),
       ),
-      if (filters != null) filters!,
+      ?filters,
       if (selectedCount > 0) Text('$selectedCount selected'),
       if (onBulkAction != null && selectedCount > 0)
         TextButton(onPressed: onBulkAction, child: const Text('Bulk actions')),

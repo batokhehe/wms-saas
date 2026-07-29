@@ -112,6 +112,29 @@ const (
 
 	// Customer capabilities, added by migration 20260801100001. The structural
 	// sibling of the supplier codes.
+	// Inventory-ledger capability, added by migration 20260808100001. There is
+	// exactly ONE: the ledger is append-only and read-only, so there is no write
+	// capability to grant.
+	InventoryLedgerRead Code = "inventoryledger.read"
+
+	// Catalogue master data, added by migration 20260809100000. These codes were
+	// enforced by the brand, category and product routes but were absent from the
+	// catalogue, so they could never be granted and those endpoints answered 403
+	// to every caller including OWNER.
+	CategoryRead   Code = "category.read"
+	CategoryCreate Code = "category.create"
+	CategoryUpdate Code = "category.update"
+	CategoryDelete Code = "category.delete"
+
+	BrandRead   Code = "brand.read"
+	BrandCreate Code = "brand.create"
+	BrandUpdate Code = "brand.update"
+	BrandDelete Code = "brand.delete"
+
+	// ProductDelete guards archiving a product; the product routes required it
+	// while the catalogue listed only product.activate/discontinue.
+	ProductDelete Code = "product.delete"
+
 	CustomerRead     Code = "customer.read"
 	CustomerCreate   Code = "customer.create"
 	CustomerUpdate   Code = "customer.update"
@@ -146,6 +169,10 @@ func PermissionCatalogue() []Code {
 		InventoryReserve, InventoryTransfer, InventoryLock, InventoryCycleCount,
 		SupplierRead, SupplierCreate, SupplierUpdate, SupplierActivate,
 		CustomerRead, CustomerCreate, CustomerUpdate, CustomerActivate,
+		InventoryLedgerRead,
+		CategoryRead, CategoryCreate, CategoryUpdate, CategoryDelete,
+		BrandRead, BrandCreate, BrandUpdate, BrandDelete,
+		ProductDelete,
 	}
 }
 

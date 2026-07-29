@@ -84,13 +84,14 @@ class _SidebarGroup extends StatelessWidget {
   final bool collapsed;
   @override
   Widget build(BuildContext context) {
-    if (collapsed)
+    if (collapsed) {
       return Column(
         children: [
           for (final item in group.items)
             _SidebarItem(item: item, location: location, collapsed: true),
         ],
       );
+    }
     return ExpansionTile(
       initiallyExpanded: group.items.any((item) => item.location == location),
       title: Text(group.label, style: Theme.of(context).textTheme.labelMedium),

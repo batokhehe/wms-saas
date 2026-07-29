@@ -42,7 +42,7 @@ func (p *LogEventPublisher) Publish(ctx context.Context, event entity.Event) {
 	// keys, which parsers handle inconsistently.
 	fields := []zap.Field{
 		zap.String("event", string(event.Name)),
-		zap.String("event_inventory_id", event.InventoryID.String()),
+		zap.String("event_position_id", event.PositionID.String()),
 		zap.String("event_company_id", event.CompanyID.String()),
 		zap.String("event_actor_id", event.ActorID.String()),
 		zap.Time("event_occurred_at", event.OccurredAt),

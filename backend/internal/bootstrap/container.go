@@ -15,13 +15,18 @@ import (
 
 	"github.com/batokhehe/wms-saas/backend/internal/config"
 	"github.com/batokhehe/wms-saas/backend/internal/module/auth"
+	"github.com/batokhehe/wms-saas/backend/internal/module/brand"
+	"github.com/batokhehe/wms-saas/backend/internal/module/category"
 	"github.com/batokhehe/wms-saas/backend/internal/module/customer"
 	"github.com/batokhehe/wms-saas/backend/internal/module/health"
+
 	"github.com/batokhehe/wms-saas/backend/internal/module/inventory"
-	inventoryport "github.com/batokhehe/wms-saas/backend/internal/module/inventory/port"
+	inventoryservice "github.com/batokhehe/wms-saas/backend/internal/module/inventory/service"
+	"github.com/batokhehe/wms-saas/backend/internal/module/inventoryledger"
 	"github.com/batokhehe/wms-saas/backend/internal/module/location"
 	locationrepository "github.com/batokhehe/wms-saas/backend/internal/module/location/repository"
 	locationservice "github.com/batokhehe/wms-saas/backend/internal/module/location/service"
+	"github.com/batokhehe/wms-saas/backend/internal/module/lookup"
 	"github.com/batokhehe/wms-saas/backend/internal/module/product"
 	productrepository "github.com/batokhehe/wms-saas/backend/internal/module/product/repository"
 	productservice "github.com/batokhehe/wms-saas/backend/internal/module/product/service"
@@ -65,17 +70,21 @@ type Container struct {
 	IDs     port.IDGenerator
 	Tx      transaction.Manager
 
-	Health    *health.Module
-	Auth      *auth.Module
-	Tenancy   *tenancy.Module
-	RBAC      *rbac.Module
-	Warehouse *warehouse.Module
-	Location  *location.Module
-	Product   *product.Module
-	Inventory *inventory.Module
-	Supplier  *supplier.Module
-	Customer  *customer.Module
-	Registry  *module.Registry
+	Health          *health.Module
+	Auth            *auth.Module
+	Tenancy         *tenancy.Module
+	RBAC            *rbac.Module
+	Warehouse       *warehouse.Module
+	Location        *location.Module
+	Product         *product.Module
+	Inventory       *inventory.Module
+	InventoryLedger *inventoryledger.Module
+	Supplier        *supplier.Module
+	Customer        *customer.Module
+	Category        *category.Module
+	Brand           *brand.Module
+	Lookup          *lookup.Module
+	Registry        *module.Registry
 
 	// closers are torn down in reverse registration order, mirroring how defer
 	// unwinds, so a component is never closed before its dependents.
@@ -293,6 +302,7 @@ func (c *Container) buildRegistry() error {
 		productservice.NewAcceptAnyBrand(),
 		productservice.NewAcceptAnyUOM(),
 		productservice.NewNoInventory(),
+		productservice.NewNoStock(),
 	)
 
 	// Inventory owns stock. Its three reference providers are wired to REAL
@@ -304,13 +314,13 @@ func (c *Container) buildRegistry() error {
 	// module's private graph).
 	productRepo := productrepository.New(c.Postgres.DB, c.IDs)
 	c.Inventory = inventory.New(deps, inventory.Config{
-		Verifier:     c.Auth.Verifier(),
-		Companies:    c.Tenancy.Resolver(),
-		Permissions:  c.RBAC.Resolver(),
-		Products:     newInventoryProductProvider(productRepo),
-		Warehouses:   newInventoryWarehouseProvider(warehouseRepo),
-		Locations:    newInventoryLocationProvider(locationRepo),
-		Reservations: inventoryport.NewNoReservations(),
+		Verifier:    c.Auth.Verifier(),
+		Companies:   c.Tenancy.Resolver(),
+		Permissions: c.RBAC.Resolver(),
+		Products:    newInventoryProductProvider(productRepo),
+		Warehouses:  newInventoryWarehouseProvider(warehouseRepo),
+		Locations:   newInventoryLocationProvider(locationRepo),
+		Policy:      inventoryservice.NewDefaultStockPolicy(),
 	})
 
 	// Supplier is master data — a self-contained vertical slice with no
@@ -324,6 +334,15 @@ func (c *Container) buildRegistry() error {
 	// Sales Order sprint but consumed by no operation, so there is nothing to
 	// inject.
 	c.Customer = customer.New(deps, c.Auth.Verifier(), c.Tenancy.Resolver(), c.RBAC.Resolver())
+	c.Category = category.New(deps, c.Auth.Verifier(), c.Tenancy.Resolver(), c.RBAC.Resolver())
+	c.Brand = brand.New(deps, c.Auth.Verifier(), c.Tenancy.Resolver(), c.RBAC.Resolver())
+	c.Lookup = lookup.New(deps, c.Auth.Verifier(), c.Tenancy.Resolver(), c.RBAC.Resolver())
+
+	// The append-only audit trail behind every stock movement. It is wired as a
+	// standalone module: the Inventory module publishes through the seam in
+	// inventoryledger/service/interfaces.go, and connecting the two is a
+	// composition-root decision a later sprint makes without touching either.
+	c.InventoryLedger = inventoryledger.New(deps, c.Auth.Verifier(), c.Tenancy.Resolver(), c.RBAC.Resolver())
 
 	c.Registry = module.NewRegistry(c.Logger).Register(
 		c.Health,
@@ -334,8 +353,12 @@ func (c *Container) buildRegistry() error {
 		c.Location,
 		c.Product,
 		c.Inventory,
+		c.InventoryLedger,
 		c.Supplier,
 		c.Customer,
+		c.Category,
+		c.Brand,
+		c.Lookup,
 	)
 
 	// Catch wiring mistakes at boot rather than as a mysteriously missing

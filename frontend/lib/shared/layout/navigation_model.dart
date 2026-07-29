@@ -33,11 +33,46 @@ const appNavigationGroups = [
   AppNavigationGroup(
     label: 'Master data',
     items: [
-      AppNavigationItem(label: 'Warehouse', icon: Icons.warehouse_outlined),
-      AppNavigationItem(label: 'Location', icon: Icons.grid_view_outlined),
-      AppNavigationItem(label: 'Product', icon: Icons.inventory_2_outlined),
-      AppNavigationItem(label: 'Supplier', icon: Icons.local_shipping_outlined),
-      AppNavigationItem(label: 'Customer', icon: Icons.people_outline),
+      AppNavigationItem(
+        label: 'Warehouse',
+        icon: Icons.warehouse_outlined,
+        location: '/warehouses',
+      ),
+      AppNavigationItem(
+        label: 'Location',
+        icon: Icons.grid_view_outlined,
+        location: '/locations',
+      ),
+      AppNavigationItem(
+        label: 'Product',
+        icon: Icons.inventory_2_outlined,
+        location: '/products',
+      ),
+      AppNavigationItem(
+        label: 'UOM',
+        icon: Icons.straighten_outlined,
+        location: '/uoms',
+      ),
+      AppNavigationItem(
+        label: 'Category',
+        icon: Icons.category_outlined,
+        location: '/categories',
+      ),
+      AppNavigationItem(
+        label: 'Brand',
+        icon: Icons.branding_watermark_outlined,
+        location: '/brands',
+      ),
+      AppNavigationItem(
+        label: 'Supplier',
+        icon: Icons.local_shipping_outlined,
+        location: '/suppliers',
+      ),
+      AppNavigationItem(
+        label: 'Customer',
+        icon: Icons.people_outline,
+        location: '/customers',
+      ),
     ],
   ),
   AppNavigationGroup(
@@ -67,7 +102,16 @@ const appNavigationGroups = [
   AppNavigationGroup(
     label: 'Operations',
     items: [
-      AppNavigationItem(label: 'Inventory', icon: Icons.analytics_outlined),
+      AppNavigationItem(
+        label: 'Inventory',
+        icon: Icons.analytics_outlined,
+        location: '/inventory',
+      ),
+      AppNavigationItem(
+        label: 'Inventory ledger',
+        icon: Icons.receipt_long_outlined,
+        location: '/inventory-ledger',
+      ),
       AppNavigationItem(label: 'Reports', icon: Icons.bar_chart_outlined),
       AppNavigationItem(label: 'Settings', icon: Icons.settings_outlined),
     ],
