@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+
+	ledgerdto "github.com/batokhehe/wms-saas/backend/internal/module/inventoryledger/dto"
 )
 
 // This file declares the inventory module's EXTERNAL VERIFIERS: the narrow
@@ -146,4 +148,26 @@ func (DefaultStockPolicy) AllowNegativeStock(context.Context, uuid.UUID) (bool, 
 // RequireQuarantineOnReceipt always reports false.
 func (DefaultStockPolicy) RequireQuarantineOnReceipt(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
 	return false, nil
+}
+
+// ---------------------------------------------------------------------------
+// LedgerPublisher
+// ---------------------------------------------------------------------------
+
+// LedgerPublisher records stock movements in the append-only inventory ledger.
+type LedgerPublisher interface {
+	RecordMovement(ctx context.Context, movement ledgerdto.RecordMovementRequest) error
+}
+
+// NoopLedgerPublisher is the permissive default when no ledger service is wired.
+type NoopLedgerPublisher struct{}
+
+var _ LedgerPublisher = (*NoopLedgerPublisher)(nil)
+
+// NewNoopLedgerPublisher builds the default no-op ledger publisher.
+func NewNoopLedgerPublisher() *NoopLedgerPublisher { return &NoopLedgerPublisher{} }
+
+// RecordMovement always returns nil without recording.
+func (NoopLedgerPublisher) RecordMovement(context.Context, ledgerdto.RecordMovementRequest) error {
+	return nil
 }

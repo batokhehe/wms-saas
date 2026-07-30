@@ -45,6 +45,7 @@ type Service struct {
 	ids    sharedport.IDGenerator
 	tx     transaction.Manager
 	events EventPublisher
+	ledger LedgerPublisher
 }
 
 // New builds the service.
@@ -58,9 +59,16 @@ func New(
 	ids sharedport.IDGenerator,
 	tx transaction.Manager,
 	events EventPublisher,
+	ledger LedgerPublisher,
 ) *Service {
 	if policy == nil {
 		policy = NewDefaultStockPolicy()
+	}
+	// A nil ledger becomes the NAMED no-op rather than nil, so an unwired
+	// integration cannot panic mid-movement. Production wiring supplies the real
+	// publisher in bootstrap; the no-op exists for tests that do not assert on it.
+	if ledger == nil {
+		ledger = NewNoopLedgerPublisher()
 	}
 	return &Service{
 		repo:       repo,
@@ -72,6 +80,7 @@ func New(
 		ids:        ids,
 		tx:         tx,
 		events:     events,
+		ledger:     ledger,
 	}
 }
 
@@ -123,7 +132,13 @@ func (s *Service) ReceiveStock(ctx context.Context, req dto.ReceiveStockRequest)
 		if err != nil {
 			return err
 		}
-		if err := loaded.Receive(amount, actorID, s.clock.Now()); err != nil {
+
+		// One clock reading for the whole operation, so the aggregate's timestamps
+		// and the ledger entry's business time cannot disagree by a few microseconds.
+		now := s.clock.Now()
+		before := snapshot(loaded)
+
+		if err := loaded.Receive(amount, actorID, now); err != nil {
 			return err
 		}
 
@@ -135,7 +150,7 @@ func (s *Service) ReceiveStock(ctx context.Context, req dto.ReceiveStockRequest)
 			return err
 		}
 		if hold {
-			if err := loaded.MoveToQuarantine(amount, actorID, s.clock.Now()); err != nil {
+			if err := loaded.MoveToQuarantine(amount, actorID, now); err != nil {
 				return err
 			}
 		}
@@ -143,6 +158,17 @@ func (s *Service) ReceiveStock(ctx context.Context, req dto.ReceiveStockRequest)
 		if err := s.repo.Update(ctx, loaded); err != nil {
 			return err
 		}
+
+		// ONE entry for the whole receipt, even when the quarantine policy moved
+		// the units straight on. The two bucket changes are halves of a single
+		// business event — the goods arrived and were held — so recording them
+		// separately would double-count the arrival in any report that sums
+		// INBOUND movements.
+		if err := s.recordMovement(ctx, loaded, movementInbound,
+			before, snapshot(loaded), movementRef{kind: "RECEIVE"}, now); err != nil {
+			return err
+		}
+
 		position = loaded
 		return nil
 	})
@@ -160,7 +186,7 @@ func (s *Service) ReceiveStock(ctx context.Context, req dto.ReceiveStockRequest)
 
 // IssueStock removes stock from a position's available balance.
 func (s *Service) IssueStock(ctx context.Context, req dto.PositionQuantityRequest) (dto.PositionResponse, error) {
-	return s.moveQuantity(ctx, req, "IssueStock",
+	return s.moveQuantity(ctx, req, "IssueStock", movementOutbound,
 		func(p *entity.InventoryPosition, actor uuid.UUID, now time.Time) error {
 			return p.Issue(entity.MustQuantity(req.Quantity), actor, now)
 		})
@@ -168,7 +194,7 @@ func (s *Service) IssueStock(ctx context.Context, req dto.PositionQuantityReques
 
 // ReserveStock softly promises available stock to an order.
 func (s *Service) ReserveStock(ctx context.Context, req dto.PositionQuantityRequest) (dto.PositionResponse, error) {
-	return s.moveQuantity(ctx, req, "ReserveStock",
+	return s.moveQuantity(ctx, req, "ReserveStock", movementReservation,
 		func(p *entity.InventoryPosition, actor uuid.UUID, now time.Time) error {
 			return p.Reserve(entity.MustQuantity(req.Quantity), actor, now)
 		})
@@ -176,7 +202,7 @@ func (s *Service) ReserveStock(ctx context.Context, req dto.PositionQuantityRequ
 
 // ReleaseReservation returns a soft promise to the available pool.
 func (s *Service) ReleaseReservation(ctx context.Context, req dto.PositionQuantityRequest) (dto.PositionResponse, error) {
-	return s.moveQuantity(ctx, req, "ReleaseReservation",
+	return s.moveQuantity(ctx, req, "ReleaseReservation", movementReservation,
 		func(p *entity.InventoryPosition, actor uuid.UUID, now time.Time) error {
 			return p.Release(entity.MustQuantity(req.Quantity), actor, now)
 		})
@@ -184,7 +210,7 @@ func (s *Service) ReleaseReservation(ctx context.Context, req dto.PositionQuanti
 
 // AllocateStock hardens a reservation into an assignment against a task.
 func (s *Service) AllocateStock(ctx context.Context, req dto.PositionQuantityRequest) (dto.PositionResponse, error) {
-	return s.moveQuantity(ctx, req, "AllocateStock",
+	return s.moveQuantity(ctx, req, "AllocateStock", movementAllocation,
 		func(p *entity.InventoryPosition, actor uuid.UUID, now time.Time) error {
 			return p.Allocate(entity.MustQuantity(req.Quantity), actor, now)
 		})
@@ -192,7 +218,7 @@ func (s *Service) AllocateStock(ctx context.Context, req dto.PositionQuantityReq
 
 // DeallocateStock returns an assignment to the reserved pool.
 func (s *Service) DeallocateStock(ctx context.Context, req dto.PositionQuantityRequest) (dto.PositionResponse, error) {
-	return s.moveQuantity(ctx, req, "DeallocateStock",
+	return s.moveQuantity(ctx, req, "DeallocateStock", movementAllocation,
 		func(p *entity.InventoryPosition, actor uuid.UUID, now time.Time) error {
 			return p.Deallocate(entity.MustQuantity(req.Quantity), actor, now)
 		})
@@ -200,7 +226,7 @@ func (s *Service) DeallocateStock(ctx context.Context, req dto.PositionQuantityR
 
 // MoveToQuarantine holds available stock back from use.
 func (s *Service) MoveToQuarantine(ctx context.Context, req dto.PositionQuantityRequest) (dto.PositionResponse, error) {
-	return s.moveQuantity(ctx, req, "MoveToQuarantine",
+	return s.moveQuantity(ctx, req, "MoveToQuarantine", movementQuarantine,
 		func(p *entity.InventoryPosition, actor uuid.UUID, now time.Time) error {
 			return p.MoveToQuarantine(entity.MustQuantity(req.Quantity), actor, now)
 		})
@@ -208,7 +234,7 @@ func (s *Service) MoveToQuarantine(ctx context.Context, req dto.PositionQuantity
 
 // ReleaseFromQuarantine returns held stock to the available pool.
 func (s *Service) ReleaseFromQuarantine(ctx context.Context, req dto.PositionQuantityRequest) (dto.PositionResponse, error) {
-	return s.moveQuantity(ctx, req, "ReleaseFromQuarantine",
+	return s.moveQuantity(ctx, req, "ReleaseFromQuarantine", movementQuarantine,
 		func(p *entity.InventoryPosition, actor uuid.UUID, now time.Time) error {
 			return p.ReleaseFromQuarantine(entity.MustQuantity(req.Quantity), actor, now)
 		})
@@ -233,7 +259,12 @@ func (s *Service) AdjustStock(ctx context.Context, req dto.AdjustStockRequest) (
 	}
 	counted := *req.Quantity
 
+	// The adjustment REASON selects the movement type: a cycle count and an
+	// opening balance are distinct events from a hand correction, and a report
+	// grouping by movement has to be able to tell them apart.
 	return s.mutate(ctx, req.PositionID, "AdjustStock",
+		adjustmentMovementType(req.Type.String()),
+		movementRef{kind: "ADJUST", reason: reason},
 		func(p *entity.InventoryPosition, actor uuid.UUID, now time.Time) error {
 			return p.Adjust(counted, reason, actor, now)
 		})
@@ -242,12 +273,38 @@ func (s *Service) AdjustStock(ctx context.Context, req dto.AdjustStockRequest) (
 // moveQuantity validates the amount, then applies a single-position movement.
 // Validating here means MustQuantity inside each closure cannot panic.
 func (s *Service) moveQuantity(
-	ctx context.Context, req dto.PositionQuantityRequest, op string, apply movement,
+	ctx context.Context, req dto.PositionQuantityRequest, op, movementType string, apply movement,
 ) (dto.PositionResponse, error) {
 	if _, err := entity.NewQuantity(req.Quantity); err != nil {
 		return dto.PositionResponse{}, err
 	}
-	return s.mutate(ctx, req.PositionID, op, apply)
+	return s.mutate(ctx, req.PositionID, op, movementType, movementRef{kind: refKindFor(op)}, apply)
+}
+
+// refKindFor names the inventory operation that caused a movement.
+//
+// Until a business document carries the movement, the operation IS the
+// provenance: "why did this position change?" is answered by the endpoint that
+// changed it. Deriving it from the op string keeps the two from drifting.
+func refKindFor(op string) string {
+	switch op {
+	case "IssueStock":
+		return "ISSUE"
+	case "ReserveStock":
+		return "RESERVE"
+	case "ReleaseReservation":
+		return "RELEASE"
+	case "AllocateStock":
+		return "ALLOCATE"
+	case "DeallocateStock":
+		return "DEALLOCATE"
+	case "MoveToQuarantine":
+		return "QUARANTINE"
+	case "ReleaseFromQuarantine":
+		return "RELEASE_QUARANTINE"
+	default:
+		return "INVENTORY"
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -308,6 +365,9 @@ func (s *Service) TransferStock(ctx context.Context, req dto.TransferStockReques
 		}
 
 		now := s.clock.Now()
+		originBefore := snapshot(loadedOrigin)
+		destinationBefore := snapshot(loadedDestination)
+
 		if err := loadedOrigin.Issue(amount, actorID, now); err != nil {
 			return err
 		}
@@ -319,6 +379,22 @@ func (s *Service) TransferStock(ctx context.Context, req dto.TransferStockReques
 			return err
 		}
 		if err := s.repo.Update(ctx, loadedDestination); err != nil {
+			return err
+		}
+
+		// TWO entries, one per position — a ledger entry describes ONE position's
+		// balances, so a movement spanning two of them cannot be one row. They
+		// share a generated reference id, which is what lets a reader recognise
+		// the pair as a single transfer rather than an unrelated issue and receipt.
+		transferID := s.ids.NewID()
+		ref := movementRef{kind: "TRANSFER", id: &transferID}
+
+		if err := s.recordMovement(ctx, loadedOrigin, movementTransfer,
+			originBefore, snapshot(loadedOrigin), ref, now); err != nil {
+			return err
+		}
+		if err := s.recordMovement(ctx, loadedDestination, movementTransfer,
+			destinationBefore, snapshot(loadedDestination), ref, now); err != nil {
 			return err
 		}
 
@@ -384,7 +460,8 @@ func (s *Service) ListInventoryPositions(ctx context.Context, query dto.ListPosi
 // position: load, call one aggregate behaviour, persist — inside one transaction
 // — then publish after the commit.
 func (s *Service) mutate(
-	ctx context.Context, positionID uuid.UUID, op string, apply movement,
+	ctx context.Context, positionID uuid.UUID, op, movementType string,
+	ref movementRef, apply movement,
 ) (dto.PositionResponse, error) {
 	companyID, actorID, err := s.actor(ctx)
 	if err != nil {
@@ -404,12 +481,23 @@ func (s *Service) mutate(
 			return apperror.Forbidden("This position belongs to another company").
 				WithOp("inventory.service." + op)
 		}
-		if err := apply(loaded, actorID, s.clock.Now()); err != nil {
+		now := s.clock.Now()
+		before := snapshot(loaded)
+
+		if err := apply(loaded, actorID, now); err != nil {
 			return err
 		}
 		if err := s.repo.Update(ctx, loaded); err != nil {
 			return err
 		}
+
+		// Inside the same transaction: a ledger failure here rolls the movement
+		// back, so stock never moves unwitnessed.
+		if err := s.recordMovement(ctx, loaded, movementType,
+			before, snapshot(loaded), ref, now); err != nil {
+			return err
+		}
+
 		position = loaded
 		return nil
 	})

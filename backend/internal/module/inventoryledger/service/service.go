@@ -132,9 +132,15 @@ func (s *Service) RecordMovement(ctx context.Context, req dto.RecordMovementRequ
 	return mapper.ToResponse(entry), nil
 }
 
-// OnInventoryMovement satisfies InventoryEventSubscriber, so the service can be
-// handed straight to a publisher with no adapter. It discards the response
-// because a subscriber has no caller to return one to.
+// OnInventoryMovement satisfies InventoryEventSubscriber. It discards the
+// response because a subscriber has no caller to return one to, but it does NOT
+// discard the error: the Inventory module calls this inside a movement's own
+// transaction and aborts that movement when it fails, which is the whole basis
+// of "every movement appends exactly one entry".
+//
+// Because RecordMovement wraps its append in RunInTransaction, and that manager
+// joins an existing transaction through a SAVEPOINT rather than opening a second
+// one, the entry is written on the caller's connection and commits with it.
 func (s *Service) OnInventoryMovement(ctx context.Context, movement dto.RecordMovementRequest) error {
 	_, err := s.RecordMovement(ctx, movement)
 	return err

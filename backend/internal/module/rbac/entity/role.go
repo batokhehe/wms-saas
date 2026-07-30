@@ -185,6 +185,23 @@ func DefaultPermissions(roleName string) []Code {
 			// decision.
 			CategoryRead, CategoryCreate, CategoryUpdate,
 			BrandRead, BrandCreate, BrandUpdate,
+			// Transfers are the movements an admin plans and approves.
+			// stocktransfer.complete is withheld for the same reason as
+			// inventory.adjust: it is the step that actually changes a balance.
+			StockTransferRead, StockTransferCreate, StockTransferUpdate,
+			StockTransferConfirm, StockTransferCancel,
+			// Admins plan and cancel purchasing, but do not APPROVE it: approval
+			// commits the company to spend, which is an ownership decision.
+			PurchaseOrderRead, PurchaseOrderCreate, PurchaseOrderUpdate,
+			PurchaseOrderCancel,
+			// Units of measure are referenced by every product and order line, so
+			// every role that reads those must be able to resolve them.
+			UOMRead,
+			// Admins run inbound paperwork end to end. goodsreceipt.receive is
+			// withheld for the same reason as inventory.adjust: it is the step that
+			// creates stock.
+			GoodsReceiptRead, GoodsReceiptCreate, GoodsReceiptUpdate,
+			GoodsReceiptConfirm, GoodsReceiptCancel,
 		}
 
 	case SystemRoleStaff:
@@ -213,6 +230,16 @@ func DefaultPermissions(roleName string) []Code {
 			InventoryLedgerRead,
 			// Staff read the catalogue classifications but do not curate them.
 			CategoryRead, BrandRead,
+			// Staff physically move the pallet, so they read transfers and mark
+			// them done. Deciding WHAT moves is not their call.
+			StockTransferRead, StockTransferComplete,
+			// Staff see what is expected to arrive; they do not order it.
+			PurchaseOrderRead,
+			UOMRead,
+			// Staff are the people on the dock: they raise the receipt, check it
+			// off and book the stock in. They do not cancel it.
+			GoodsReceiptRead, GoodsReceiptCreate, GoodsReceiptUpdate,
+			GoodsReceiptConfirm, GoodsReceiptReceive,
 		}
 
 	default:

@@ -23,6 +23,7 @@ type harness struct {
 	repo   *fakeRepo
 	tx     *fakeTxManager
 	events *fakeEventPublisher
+	ledger *fakeLedger
 
 	products   ProductVerifier
 	warehouses WarehouseVerifier
@@ -38,6 +39,7 @@ func withWarehouses(v WarehouseVerifier) harnessOption {
 }
 func withLocations(v LocationVerifier) harnessOption { return func(h *harness) { h.locations = v } }
 func withPolicy(p StockPolicyProvider) harnessOption { return func(h *harness) { h.policy = p } }
+func withLedger(l *fakeLedger) harnessOption         { return func(h *harness) { h.ledger = l } }
 
 func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	t.Helper()
@@ -46,6 +48,7 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		repo:       repo,
 		tx:         &fakeTxManager{repo: repo},
 		events:     &fakeEventPublisher{},
+		ledger:     &fakeLedger{},
 		products:   NewAcceptAnyProduct(),
 		warehouses: NewAcceptAnyWarehouse(),
 		locations:  NewAcceptAnyLocation(),
@@ -55,7 +58,7 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		opt(h)
 	}
 	h.svc = New(repo, h.products, h.warehouses, h.locations, h.policy,
-		adapterclock.NewFakeAt("2026-08-03T10:00:00Z"), adapterid.NewSequential(), h.tx, h.events)
+		adapterclock.NewFakeAt("2026-08-03T10:00:00Z"), adapterid.NewSequential(), h.tx, h.events, h.ledger)
 	return h
 }
 

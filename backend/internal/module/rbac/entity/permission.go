@@ -135,6 +135,52 @@ const (
 	// while the catalogue listed only product.activate/discontinue.
 	ProductDelete Code = "product.delete"
 
+	// Goods-receipt capabilities, added by migration 20260816100002.
+	//
+	// GoodsReceiptReceive is the code that POSTS STOCK: confirming says the
+	// delivery was checked, receiving books it into inventory and appends to the
+	// ledger. It is the only step here that changes a balance, so it is withheld
+	// from ADMIN on the same principle as inventory.adjust.
+	GoodsReceiptRead    Code = "goodsreceipt.read"
+	GoodsReceiptCreate  Code = "goodsreceipt.create"
+	GoodsReceiptUpdate  Code = "goodsreceipt.update"
+	GoodsReceiptConfirm Code = "goodsreceipt.confirm"
+	GoodsReceiptReceive Code = "goodsreceipt.receive"
+	GoodsReceiptCancel  Code = "goodsreceipt.cancel"
+
+	// Unit-of-measure capability, added by migration 20260816100000.
+	//
+	// There is exactly ONE code because there is exactly one enforced capability:
+	// the /lookups/uoms route requires it. UOM is GLOBAL master data shared by
+	// every tenant, and its own CRUD routes carry no permission today — adding
+	// codes for operations nothing enforces would be a promise the software does
+	// not keep. See docs note in Remaining Issues.
+	UOMRead Code = "uom.read"
+
+	// Purchase-order capabilities, added by migration 20260815100001.
+	//
+	// PurchaseOrderApprove is separate from PurchaseOrderUpdate deliberately:
+	// editing a draft is clerical, while approving commits the company to spend
+	// and unlocks the inbound chain. It is withheld from ADMIN for the same
+	// reason as company.delete.
+	PurchaseOrderRead    Code = "purchaseorder.read"
+	PurchaseOrderCreate  Code = "purchaseorder.create"
+	PurchaseOrderUpdate  Code = "purchaseorder.update"
+	PurchaseOrderApprove Code = "purchaseorder.approve"
+	PurchaseOrderCancel  Code = "purchaseorder.cancel"
+
+	// Stock-transfer capabilities, added by migration 20260814100001.
+	//
+	// The three lifecycle codes are separate because they authorise materially
+	// different things. StockTransferComplete is the one that MOVES REAL STOCK, so
+	// it is withheld from ADMIN on the same principle as InventoryAdjust.
+	StockTransferRead     Code = "stocktransfer.read"
+	StockTransferCreate   Code = "stocktransfer.create"
+	StockTransferUpdate   Code = "stocktransfer.update"
+	StockTransferConfirm  Code = "stocktransfer.confirm"
+	StockTransferComplete Code = "stocktransfer.complete"
+	StockTransferCancel   Code = "stocktransfer.cancel"
+
 	CustomerRead     Code = "customer.read"
 	CustomerCreate   Code = "customer.create"
 	CustomerUpdate   Code = "customer.update"
@@ -173,6 +219,13 @@ func PermissionCatalogue() []Code {
 		CategoryRead, CategoryCreate, CategoryUpdate, CategoryDelete,
 		BrandRead, BrandCreate, BrandUpdate, BrandDelete,
 		ProductDelete,
+		StockTransferRead, StockTransferCreate, StockTransferUpdate,
+		StockTransferConfirm, StockTransferComplete, StockTransferCancel,
+		PurchaseOrderRead, PurchaseOrderCreate, PurchaseOrderUpdate,
+		PurchaseOrderApprove, PurchaseOrderCancel,
+		UOMRead,
+		GoodsReceiptRead, GoodsReceiptCreate, GoodsReceiptUpdate,
+		GoodsReceiptConfirm, GoodsReceiptReceive, GoodsReceiptCancel,
 	}
 }
 

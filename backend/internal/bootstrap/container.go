@@ -20,6 +20,7 @@ import (
 	"github.com/batokhehe/wms-saas/backend/internal/module/customer"
 	"github.com/batokhehe/wms-saas/backend/internal/module/health"
 
+	"github.com/batokhehe/wms-saas/backend/internal/module/goodsreceipt"
 	"github.com/batokhehe/wms-saas/backend/internal/module/inventory"
 	inventoryservice "github.com/batokhehe/wms-saas/backend/internal/module/inventory/service"
 	"github.com/batokhehe/wms-saas/backend/internal/module/inventoryledger"
@@ -30,8 +31,10 @@ import (
 	"github.com/batokhehe/wms-saas/backend/internal/module/product"
 	productrepository "github.com/batokhehe/wms-saas/backend/internal/module/product/repository"
 	productservice "github.com/batokhehe/wms-saas/backend/internal/module/product/service"
+	"github.com/batokhehe/wms-saas/backend/internal/module/purchaseorder"
 	"github.com/batokhehe/wms-saas/backend/internal/module/rbac"
 	"github.com/batokhehe/wms-saas/backend/internal/module/supplier"
+	supplierrepository "github.com/batokhehe/wms-saas/backend/internal/module/supplier/repository"
 	"github.com/batokhehe/wms-saas/backend/internal/module/tenancy"
 	"github.com/batokhehe/wms-saas/backend/internal/module/warehouse"
 	warehouserepository "github.com/batokhehe/wms-saas/backend/internal/module/warehouse/repository"
@@ -79,6 +82,8 @@ type Container struct {
 	Product         *product.Module
 	Inventory       *inventory.Module
 	InventoryLedger *inventoryledger.Module
+	PurchaseOrder   *purchaseorder.Module
+	GoodsReceipt    *goodsreceipt.Module
 	Supplier        *supplier.Module
 	Customer        *customer.Module
 	Category        *category.Module
@@ -312,6 +317,12 @@ func (c *Container) buildRegistry() error {
 	// Reservation sprint exists; a standalone product repository is constructed
 	// here for the same reason warehouse/location are (stateless, no reach into a
 	// module's private graph).
+	// The append-only audit trail behind every stock movement. Constructed BEFORE
+	// Inventory because Inventory now depends on it: every movement appends one
+	// entry inside the movement's own transaction, so the ledger has to exist
+	// before the module that writes to it.
+	c.InventoryLedger = inventoryledger.New(deps, c.Auth.Verifier(), c.Tenancy.Resolver(), c.RBAC.Resolver())
+
 	productRepo := productrepository.New(c.Postgres.DB, c.IDs)
 	c.Inventory = inventory.New(deps, inventory.Config{
 		Verifier:    c.Auth.Verifier(),
@@ -321,6 +332,7 @@ func (c *Container) buildRegistry() error {
 		Warehouses:  newInventoryWarehouseProvider(warehouseRepo),
 		Locations:   newInventoryLocationProvider(locationRepo),
 		Policy:      inventoryservice.NewDefaultStockPolicy(),
+		Ledger:      newInventoryLedgerPublisher(c.InventoryLedger.Subscriber()),
 	})
 
 	// Supplier is master data — a self-contained vertical slice with no
@@ -338,11 +350,35 @@ func (c *Container) buildRegistry() error {
 	c.Brand = brand.New(deps, c.Auth.Verifier(), c.Tenancy.Resolver(), c.RBAC.Resolver())
 	c.Lookup = lookup.New(deps, c.Auth.Verifier(), c.Tenancy.Resolver(), c.RBAC.Resolver())
 
-	// The append-only audit trail behind every stock movement. It is wired as a
-	// standalone module: the Inventory module publishes through the seam in
-	// inventoryledger/service/interfaces.go, and connecting the two is a
-	// composition-root decision a later sprint makes without touching either.
-	c.InventoryLedger = inventoryledger.New(deps, c.Auth.Verifier(), c.Tenancy.Resolver(), c.RBAC.Resolver())
+	// The planning document of the inbound chain. Its verifiers are supplied
+	// here, the one place permitted to know every module: purchase orders must
+	// reference a real supplier, a real destination warehouse and real products,
+	// and none of those checks may be made by importing another module.
+	//
+	// The warehouse and product adapters are the ones the inventory module
+	// already uses. Go interfaces are structural, so the same adapter satisfies
+	// both consumers' contracts with no extra wiring.
+	c.PurchaseOrder = purchaseorder.New(deps,
+		c.Auth.Verifier(), c.Tenancy.Resolver(), c.RBAC.Resolver(),
+		newPurchaseOrderSupplierProvider(supplierrepository.New(c.Postgres.DB, c.IDs)),
+		newInventoryWarehouseProvider(warehouseRepo),
+		newInventoryProductProvider(productRepo),
+	)
+
+	// Goods Receipt turns a delivery into stock. Its StockPoster is wired to the
+	// INVENTORY APPLICATION SERVICE, so every posting goes through the Inventory
+	// aggregate's invariants; the shared transaction manager joins the receipt's
+	// transaction through a savepoint, so a failed posting rolls the document back.
+	c.GoodsReceipt = goodsreceipt.New(deps, goodsreceipt.Config{
+		Verifier:    c.Auth.Verifier(),
+		Companies:   c.Tenancy.Resolver(),
+		Permissions: c.RBAC.Resolver(),
+		Warehouses:  newInventoryWarehouseProvider(warehouseRepo),
+		Locations:   newInventoryLocationProvider(locationRepo),
+		Products:    newInventoryProductProvider(productRepo),
+		Stock:       newGoodsReceiptStockPoster(c.Inventory.Service()),
+		Orders:      newGoodsReceiptPurchaseOrderReceiver(c.PurchaseOrder.Service()),
+	})
 
 	c.Registry = module.NewRegistry(c.Logger).Register(
 		c.Health,
@@ -358,6 +394,8 @@ func (c *Container) buildRegistry() error {
 		c.Customer,
 		c.Category,
 		c.Brand,
+		c.PurchaseOrder,
+		c.GoodsReceipt,
 		c.Lookup,
 	)
 

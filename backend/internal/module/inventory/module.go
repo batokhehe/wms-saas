@@ -33,6 +33,7 @@ import (
 // Module is the inventory vertical slice.
 type Module struct {
 	handler *handler.Handler
+	service *service.Service
 
 	verifier    middleware.TokenVerifier
 	companies   middleware.CompanyResolver
@@ -60,6 +61,11 @@ type Config struct {
 	// Policy is the per-company stock policy seam. Nil means the conservative
 	// DefaultStockPolicy.
 	Policy service.StockPolicyProvider
+
+	// Ledger receives one immutable entry per movement, inside the movement's own
+	// transaction. Nil means the no-op publisher, which is for tests only — a
+	// production container that leaves this unset records no audit trail.
+	Ledger service.LedgerPublisher
 }
 
 // New constructs the module and its internal dependency graph.
@@ -75,16 +81,23 @@ func New(deps module.Dependencies, cfg Config) *Module {
 	svc := service.New(
 		repo,
 		cfg.Products, cfg.Warehouses, cfg.Locations, cfg.Policy,
-		deps.Clock, deps.IDs, deps.Tx, events,
+		deps.Clock, deps.IDs, deps.Tx, events, cfg.Ledger,
 	)
 
 	return &Module{
 		handler:     handler.New(svc),
+		service:     svc,
 		verifier:    cfg.Verifier,
 		companies:   cfg.Companies,
 		permissions: cfg.Permissions,
 	}
 }
+
+// Service exposes the application service to the composition root, so inbound
+// modules (goods receipt, putaway) can move stock in-process rather than over
+// HTTP — and so their movements go through the Inventory aggregate's invariants
+// and join their caller's transaction.
+func (m *Module) Service() *service.Service { return m.service }
 
 // Name identifies the module.
 func (m *Module) Name() string { return "inventory" }

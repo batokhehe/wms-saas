@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	ledgerdto "github.com/batokhehe/wms-saas/backend/internal/module/inventoryledger/dto"
 	"sync"
+	"testing"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -245,4 +247,70 @@ func (p *quarantineOnReceipt) AllowNegativeStock(context.Context, uuid.UUID) (bo
 func (p *quarantineOnReceipt) RequireQuarantineOnReceipt(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
 	p.calls++
 	return true, nil
+}
+
+// ---------------------------------------------------------------------------
+// fakeLedger
+// ---------------------------------------------------------------------------
+
+// fakeLedger captures the movements the service reports, so a test can assert
+// that EXACTLY ONE entry is appended per movement and that its snapshots agree.
+//
+// It records into a plain slice rather than a map keyed by position: a movement
+// appending twice is precisely the bug these tests exist to catch, so the
+// duplicate has to survive to be counted.
+type fakeLedger struct {
+	mu        sync.Mutex
+	movements []ledgerdto.RecordMovementRequest
+	err       error
+}
+
+func (l *fakeLedger) RecordMovement(_ context.Context, movement ledgerdto.RecordMovementRequest) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.err != nil {
+		return l.err
+	}
+	l.movements = append(l.movements, movement)
+	return nil
+}
+
+// fail makes the next and every subsequent append fail, so a test can prove the
+// movement rolls back with it.
+func (l *fakeLedger) fail(err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.err = err
+}
+
+func (l *fakeLedger) count() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.movements)
+}
+
+func (l *fakeLedger) all() []ledgerdto.RecordMovementRequest {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]ledgerdto.RecordMovementRequest, len(l.movements))
+	copy(out, l.movements)
+	return out
+}
+
+// only returns the single recorded movement, failing the test when the count is
+// anything other than one.
+func (l *fakeLedger) only(t *testing.T) ledgerdto.RecordMovementRequest {
+	t.Helper()
+	movements := l.all()
+	if len(movements) != 1 {
+		t.Fatalf("expected exactly one ledger entry, got %d", len(movements))
+	}
+	return movements[0]
+}
+
+func (l *fakeLedger) reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.movements = nil
+	l.err = nil
 }

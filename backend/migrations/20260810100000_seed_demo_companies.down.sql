@@ -4,8 +4,15 @@
 -- companies are removed by id; the global UOM rows are removed too, since this
 -- migration is what introduced them.
 
+-- The ledger carries an append-only trigger that refuses UPDATE and DELETE. That
+-- guard exists to stop the APPLICATION from rewriting history; a migration is
+-- privileged schema maintenance, and a seed must be able to remove exactly the
+-- rows it inserted. The trigger is therefore disabled for this statement only and
+-- re-enabled immediately, so the guarantee holds for every non-migration writer.
+ALTER TABLE inventory_ledger_entries DISABLE TRIGGER trg_inventory_ledger_entries_immutable;
 DELETE FROM inventory_ledger_entries WHERE company_id IN
     ('a0000000-0000-4000-a000-000000000001','b0000000-0000-4000-b000-000000000001');
+ALTER TABLE inventory_ledger_entries ENABLE TRIGGER trg_inventory_ledger_entries_immutable;
 DELETE FROM inventory_positions WHERE company_id IN
     ('a0000000-0000-4000-a000-000000000001','b0000000-0000-4000-b000-000000000001');
 

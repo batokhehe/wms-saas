@@ -35,9 +35,11 @@ import (
 // stock transition. The ledger declares it — rather than Inventory — so the shape
 // of an announcement is defined by the side that has to consume it.
 //
-// Nothing implements this yet, and deliberately so: implementing it means
-// choosing a delivery mechanism, which is a separate decision from defining the
-// contract.
+// The delivery mechanism is now chosen and wired: bootstrap adapts the Inventory
+// module's LedgerPublisher onto InventoryEventSubscriber below, so a movement
+// calls straight through to this service. The call is SYNCHRONOUS and its error
+// is propagated, which is what makes the entry land in the movement's own
+// transaction — see OnInventoryMovement.
 type InventoryEventPublisher interface {
 	// PublishMovement announces that a position changed.
 	//
@@ -59,5 +61,10 @@ type InventoryEventSubscriber interface {
 	// An implementation must be IDEMPOTENT-SAFE in the sense that a duplicate
 	// delivery is refused rather than silently duplicating history: the ledger
 	// rejects a repeated entry id with a CONFLICT instead of overwriting.
+	//
+	// It must also JOIN the caller's transaction rather than opening its own, and
+	// must return its error rather than swallowing it. Both together are what
+	// guarantee a position never moves without an entry and an entry never
+	// describes a movement that rolled back.
 	OnInventoryMovement(ctx context.Context, movement dto.RecordMovementRequest) error
 }
